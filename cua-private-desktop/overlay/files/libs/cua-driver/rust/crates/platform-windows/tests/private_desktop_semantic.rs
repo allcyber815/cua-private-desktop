@@ -2422,6 +2422,95 @@ async fn private_verify_state_observes_session_owned_window_and_elements() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_winforms_verify_state_stabilizes_with_epoch_observer() {
+    let _serial = private_desktop_test_guard().await;
+    let fixture = winforms_key_fixture();
+    assert!(fixture.is_file(), "fixture missing: {}", fixture.display());
+
+    let registry = runtime_scoped_registry();
+    let session = "private-winforms-verify-stable-e2e";
+
+    let start = registry
+        .invoke("start_session", json!({ "session": session }))
+        .await;
+    assert_ok("WinForms verify start_session", &start);
+
+    let launch = registry
+        .invoke(
+            "launch_app",
+            json!({
+                "session": session,
+                "isolation_mode": "private_desktop",
+                "path": fixture.to_string_lossy(),
+            }),
+        )
+        .await;
+    assert_ok("WinForms verify launch_app", &launch);
+    let launch_json = structured(&launch);
+    let pid = launch_json["pid"].as_u64().expect("launch pid") as u32;
+    let window_id = launch_json["windows"]
+        .as_array()
+        .expect("launch windows")
+        .iter()
+        .find(|window| {
+            window["title"]
+                .as_str()
+                .is_some_and(|title| title.contains("WebGPT Background Fixture WinForms Key"))
+        })
+        .and_then(|window| window["window_id"].as_u64())
+        .unwrap_or_else(|| panic!("WinForms private verify HWND not found: {launch_json}"));
+
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    assert!(!process.is_null(), "cannot open launched pid {pid}");
+
+    // Let initial WinForms creation/accessibility noise settle before the
+    // observer-backed stability samples begin. The first verify_state sample
+    // still performs a full UIA observation; only later samples in this call
+    // may reuse it when the synchronized WinEvent epoch remains unchanged.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    let verified = registry
+        .invoke(
+            "verify_state",
+            json!({
+                "session": session,
+                "pid": pid,
+                "window_id": window_id,
+                "expect": [{
+                    "element": {
+                        "selector": {
+                            "role": "MenuItem",
+                            "label_contains": "Actions"
+                        },
+                        "exists": true
+                    }
+                }],
+                "timeout_ms": 3000,
+                "stable_samples": 2,
+            }),
+        )
+        .await;
+    assert_ok("WinForms private verify_state stable samples", &verified);
+    let receipt = structured(&verified);
+    assert_eq!(receipt["status"], "satisfied", "{receipt}");
+    assert_eq!(receipt["stable"], true, "{receipt}");
+    assert_eq!(receipt["samples"], 2, "{receipt}");
+
+    let end = registry
+        .invoke("end_session", json!({ "session": session }))
+        .await;
+    assert_ok("WinForms verify end_session", &end);
+    assert_eq!(
+        unsafe { WaitForSingleObject(process, 5_000) },
+        WAIT_OBJECT_0,
+        "end_session must tear down the private WinForms verify fixture"
+    );
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+}
+
 fn try_find_input_token(snapshot: &Value) -> Option<String> {
     snapshot["elements"]
         .as_array()?

@@ -187,7 +187,8 @@ impl PrivateStructureObserver {
         let epoch = Arc::new(AtomicU64::new(1));
         let alive = Arc::new(AtomicBool::new(false));
         let next_sync_id = Arc::new(AtomicUsize::new(1));
-        let sync_waiters = Arc::new(Mutex::new(HashMap::new()));
+        let sync_waiters: Arc<Mutex<HashMap<usize, tokio::sync::oneshot::Sender<u64>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let epoch_for_thread = epoch.clone();
         let alive_for_thread = alive.clone();
         let sync_waiters_for_thread = sync_waiters.clone();
