@@ -1867,7 +1867,8 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..16251cec11b3c94c43a7fe7a0ef01f70
 @@ -1312,22 +1370,82 @@ impl Tool for GetWindowStateTool {
          // error, and the screenshot below still comes back.
          let tree_result = if do_tree {
-             let tree_task = tokio::task::spawn_blocking(move || {
+-            let tree_task = tokio::task::spawn_blocking(move || {
++            let tree_task = async move {
 -                let mut budget =
 -                    cua_driver_core::walk_budget::WalkBudget::new(timeout_ms, max_elements);
 -                let tree =
@@ -1944,11 +1945,12 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..16251cec11b3c94c43a7fe7a0ef01f70
 -                let payload = crate::uia::cache::CachedSnapshot::from_nodes(&tree.nodes, kind);
 -                (tree, payload, budget.outcome())
 +                if let Some(environment) = tree_environment {
-+                    environment.run_attached_blocking(work)
++                    Ok(environment.run_attached_blocking_async(work).await)
 +                } else {
-+                    work()
++                    tokio::task::spawn_blocking(work).await
 +                }
-             });
+-            });
++            };
              let started = std::time::Instant::now();
              let deadline = std::time::Duration::from_millis(timeout_ms) + UIA_WALK_BACKSTOP_GRACE;
              match tokio::time::timeout(deadline, tree_task).await {
