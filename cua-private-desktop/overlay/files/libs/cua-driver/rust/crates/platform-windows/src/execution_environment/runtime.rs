@@ -5,6 +5,7 @@
 //! Tokio runtime. Tokio blocking workers are attached to the same desktop at
 //! thread start. Commands are serialized so private GUI mutations cannot race.
 
+use super::private_structure::{PrivateStructureEpoch, PrivateStructureObserver};
 use super::win32_private::{
     attach_current_thread_to, current_thread_desktop_name, PrivateChild, PrivateDesktopCore,
     PrivateJobProbe, PrivateWindowInfo,
@@ -82,6 +83,10 @@ enum ActorCommand {
     },
     DuplicateJobProbe {
         reply: mpsc::SyncSender<io::Result<PrivateJobProbe>>,
+    },
+    EnsureStructureObserver {
+        pid: u32,
+        reply: mpsc::SyncSender<io::Result<PrivateStructureEpoch>>,
     },
     RunAttachedBlocking {
         task: Box<dyn FnOnce(&tokio::runtime::Runtime) + Send + 'static>,
@@ -264,6 +269,26 @@ impl PrivateDesktopRuntime {
             })?
     }
 
+    pub(crate) fn ensure_structure_epoch(&self, pid: u32) -> io::Result<PrivateStructureEpoch> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.sender
+            .send(ActorCommand::EnsureStructureObserver {
+                pid,
+                reply: reply_tx,
+            })
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "private desktop actor stopped")
+            })?;
+        reply_rx
+            .recv_timeout(ACTOR_REPLY_TIMEOUT)
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("private structure observer actor reply timed out: {error}"),
+                )
+            })?
+    }
+
     pub fn run_attached_blocking<T, F>(&self, task: F) -> anyhow::Result<T>
     where
         T: Send + 'static,
@@ -356,6 +381,8 @@ fn actor_main(
         return;
     }
 
+    let mut structure_observer: Option<PrivateStructureObserver> = None;
+
     while let Ok(command) = receiver.recv() {
         match command {
             ActorCommand::LaunchDirect {
@@ -434,14 +461,41 @@ fn actor_main(
             ActorCommand::DuplicateJobProbe { reply } => {
                 let _ = reply.send(core.duplicate_job_probe());
             }
+            ActorCommand::EnsureStructureObserver { pid, reply } => {
+                let result = match structure_observer.as_ref() {
+                    Some(observer) if observer.pid() == pid => Ok(observer.handle()),
+                    Some(observer) => Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!(
+                            "private structure observer is already bound to pid {}; requested pid {pid}",
+                            observer.pid()
+                        ),
+                    )),
+                    None => PrivateStructureObserver::start(core.desktop_handle_addr(), pid).map(
+                        |observer| {
+                            let handle = observer.handle();
+                            structure_observer = Some(observer);
+                            handle
+                        },
+                    ),
+                };
+                let _ = reply.send(result);
+            }
             ActorCommand::RunAttachedBlocking { task } => {
                 task(&runtime);
             }
             ActorCommand::Shutdown { reply } => {
+                if let Some(observer) = structure_observer.take() {
+                    let _ = observer.stop();
+                }
                 let _ = reply.send(());
                 break;
             }
         }
+    }
+
+    if let Some(observer) = structure_observer.take() {
+        let _ = observer.stop();
     }
 
     // Drop the runtime before the core so blocking workers are gone before the
