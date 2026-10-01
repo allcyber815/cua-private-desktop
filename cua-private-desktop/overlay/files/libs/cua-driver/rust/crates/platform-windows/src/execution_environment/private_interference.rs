@@ -33,7 +33,6 @@ type Long = i32;
 type Uint = u32;
 type Wparam = usize;
 type Lparam = isize;
-type Lresult = isize;
 type RawHandle = *mut c_void;
 type WinEventHook = RawHandle;
 
