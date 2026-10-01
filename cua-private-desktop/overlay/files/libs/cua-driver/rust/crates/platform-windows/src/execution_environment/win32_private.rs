@@ -429,7 +429,9 @@ impl PrivateDesktopCore {
         pid: u32,
         timeout: Duration,
     ) -> io::Result<Vec<PrivateWindowInfo>> {
-        let deadline = std::time::Instant::now() + timeout;
+        let started = std::time::Instant::now();
+        let deadline = started + timeout;
+        let fast_poll_deadline = started + Duration::from_millis(100);
         loop {
             let windows = self.windows_for_pid(pid)?;
             // Auxiliary IME/input-indicator HWNDs can become visible before
@@ -442,11 +444,20 @@ impl PrivateDesktopCore {
             if windows
                 .iter()
                 .any(|window| window.is_on_screen && !window.title.trim().is_empty())
-                || std::time::Instant::now() >= deadline
             {
                 return Ok(windows);
             }
-            std::thread::sleep(Duration::from_millis(50));
+
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Ok(windows);
+            }
+            let poll_interval = if now < fast_poll_deadline {
+                Duration::from_millis(10)
+            } else {
+                Duration::from_millis(50)
+            };
+            std::thread::sleep(poll_interval.min(deadline.saturating_duration_since(now)));
         }
     }
 
