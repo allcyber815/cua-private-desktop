@@ -24,6 +24,7 @@ $files = @(
     'crates\platform-windows\src\bin\private_visual_worker.rs',
     'crates\platform-windows\src\execution_environment.rs',
     'crates\platform-windows\src\execution_environment\private_interference.rs',
+    'crates\platform-windows\src\execution_environment\private_structure.rs',
     'crates\platform-windows\src\execution_environment\private_visual.rs',
     'crates\platform-windows\src\execution_environment\private_visual_worker_client.rs',
     'crates\platform-windows\src\execution_environment\runtime.rs',

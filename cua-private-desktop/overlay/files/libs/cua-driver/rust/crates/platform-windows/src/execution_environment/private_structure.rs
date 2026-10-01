@@ -7,11 +7,12 @@
 
 use super::win32_private::attach_current_thread_to;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -27,8 +28,10 @@ const EVENT_OBJECT_CREATE: Dword = 0x8000;
 const EVENT_OBJECT_END: Dword = 0x80ff;
 const WINEVENT_OUTOFCONTEXT: Dword = 0x0000;
 const WM_QUIT: Uint = 0x0012;
+const WM_PRIVATE_STRUCTURE_SYNC: Uint = 0x8321;
 const PM_NOREMOVE: Uint = 0x0000;
 const OBSERVER_READY_TIMEOUT: Duration = Duration::from_secs(2);
+const OBSERVER_SYNC_TIMEOUT: Duration = Duration::from_millis(500);
 const OBSERVER_STACK_SIZE: usize = 512 * 1024;
 
 #[repr(C)]
@@ -85,6 +88,9 @@ pub(crate) struct PrivateStructureEpoch {
     pid: u32,
     epoch: Arc<AtomicU64>,
     alive: Arc<AtomicBool>,
+    thread_id: u32,
+    next_sync_id: Arc<AtomicUsize>,
+    sync_waiters: Arc<Mutex<HashMap<usize, tokio::sync::oneshot::Sender<u64>>>>,
 }
 
 impl PrivateStructureEpoch {
@@ -98,6 +104,48 @@ impl PrivateStructureEpoch {
 
     pub(crate) fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn synchronized_current(&self) -> io::Result<u64> {
+        if !self.is_alive() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "private structure observer is not alive",
+            ));
+        }
+
+        let request_id = self.next_sync_id.fetch_add(1, Ordering::Relaxed);
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.sync_waiters
+            .lock()
+            .map_err(|_| io::Error::other("private structure sync waiter lock poisoned"))?
+            .insert(request_id, reply_tx);
+
+        let posted =
+            unsafe { PostThreadMessageW(self.thread_id, WM_PRIVATE_STRUCTURE_SYNC, request_id, 0) };
+        if posted == 0 {
+            if let Ok(mut waiters) = self.sync_waiters.lock() {
+                waiters.remove(&request_id);
+            }
+            return Err(io::Error::last_os_error());
+        }
+
+        match tokio::time::timeout(OBSERVER_SYNC_TIMEOUT, reply_rx).await {
+            Ok(Ok(epoch)) => Ok(epoch),
+            Ok(Err(_)) => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "private structure observer stopped before sync reply",
+            )),
+            Err(_) => {
+                if let Ok(mut waiters) = self.sync_waiters.lock() {
+                    waiters.remove(&request_id);
+                }
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "private structure observer sync timed out",
+                ))
+            }
+        }
     }
 }
 
@@ -138,8 +186,11 @@ impl PrivateStructureObserver {
 
         let epoch = Arc::new(AtomicU64::new(1));
         let alive = Arc::new(AtomicBool::new(false));
+        let next_sync_id = Arc::new(AtomicUsize::new(1));
+        let sync_waiters = Arc::new(Mutex::new(HashMap::new()));
         let epoch_for_thread = epoch.clone();
         let alive_for_thread = alive.clone();
+        let sync_waiters_for_thread = sync_waiters.clone();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
         let join = thread::Builder::new()
@@ -204,6 +255,16 @@ impl PrivateStructureObserver {
                     if status <= 0 {
                         break;
                     }
+                    if message.message == WM_PRIVATE_STRUCTURE_SYNC {
+                        let request_id = message.wparam;
+                        let reply = sync_waiters_for_thread
+                            .lock()
+                            .ok()
+                            .and_then(|mut waiters| waiters.remove(&request_id));
+                        if let Some(reply) = reply {
+                            let _ = reply.send(epoch_for_thread.load(Ordering::Acquire));
+                        }
+                    }
                 }
 
                 alive_for_thread.store(false, Ordering::Release);
@@ -231,7 +292,14 @@ impl PrivateStructureObserver {
         };
 
         Ok(Self {
-            handle: PrivateStructureEpoch { pid, epoch, alive },
+            handle: PrivateStructureEpoch {
+                pid,
+                epoch,
+                alive,
+                thread_id,
+                next_sync_id,
+                sync_waiters,
+            },
             thread_id,
             join: Some(join),
         })
