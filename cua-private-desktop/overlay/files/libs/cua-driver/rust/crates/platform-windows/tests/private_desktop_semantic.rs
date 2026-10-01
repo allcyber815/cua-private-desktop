@@ -1814,6 +1814,21 @@ async fn private_drag_posts_inside_private_desktop_and_refuses_nonclient_input()
     let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
     assert!(!process.is_null(), "cannot open launched pid {pid}");
 
+    // CUA 0.31.0 interprets window-local pointer coordinates against the
+    // screenshot context published by get_window_state. Establish that context
+    // explicitly before testing the private-desktop drag delivery policy.
+    let snapshot = registry
+        .invoke(
+            "get_window_state",
+            json!({
+                "session": session,
+                "pid": pid,
+                "window_id": window_id,
+            }),
+        )
+        .await;
+    assert_ok("drag get_window_state", &snapshot);
+
     let blocked_foreground = registry
         .invoke(
             "drag",
