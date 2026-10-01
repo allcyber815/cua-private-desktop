@@ -9,8 +9,7 @@ use super::runtime::PrivateDesktopRuntime;
 use super::win32_private::PrivateJobProbe;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use windows::Win32::Foundation::HWND;
@@ -202,8 +201,43 @@ fn sample(probe: &PrivateJobProbe, state: &mut MonitorState) {
     }
 }
 
+struct StopSignal {
+    stopped: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl StopSignal {
+    fn new() -> Self {
+        Self {
+            stopped: Mutex::new(false),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn request_stop(&self) {
+        let mut stopped = match self.stopped.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *stopped = true;
+        self.wake.notify_all();
+    }
+
+    fn wait(&self, timeout: Duration) -> Result<bool, String> {
+        let stopped = self
+            .stopped
+            .lock()
+            .map_err(|_| "interference stop signal mutex poisoned".to_string())?;
+        let (stopped, _) = self
+            .wake
+            .wait_timeout_while(stopped, timeout, |stopped| !*stopped)
+            .map_err(|_| "interference stop signal wait poisoned".to_string())?;
+        Ok(*stopped)
+    }
+}
+
 pub struct PrivateInterferenceMonitor {
-    stop: Arc<AtomicBool>,
+    stop: Arc<StopSignal>,
     join: Option<JoinHandle<MonitorState>>,
 }
 
@@ -212,7 +246,7 @@ impl PrivateInterferenceMonitor {
         let probe = environment
             .duplicate_job_probe()
             .context("could not duplicate private Job handle for interference telemetry")?;
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(StopSignal::new());
         let stop_for_thread = stop.clone();
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
 
@@ -240,9 +274,19 @@ impl PrivateInterferenceMonitor {
                 }
 
                 loop {
-                    thread::sleep(SAMPLE_INTERVAL);
+                    let stopping = match stop_for_thread.wait(SAMPLE_INTERVAL) {
+                        Ok(stopping) => stopping,
+                        Err(error) => {
+                            state.fail(error);
+                            true
+                        }
+                    };
+                    // Keep the old evidence contract: every periodic wake and
+                    // the final stop wake are followed by an authoritative
+                    // sample. The stop wake is now immediate instead of waiting
+                    // for the remainder of an unconditional 20 ms sleep.
                     sample(&probe, &mut state);
-                    if stop_for_thread.load(Ordering::Acquire) {
+                    if stopping {
                         break;
                     }
                 }
@@ -253,12 +297,12 @@ impl PrivateInterferenceMonitor {
         match ready_rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                stop.store(true, Ordering::Release);
+                stop.request_stop();
                 let _ = join.join();
                 bail!("{error}");
             }
             Err(error) => {
-                stop.store(true, Ordering::Release);
+                stop.request_stop();
                 let _ = join.join();
                 bail!("interference monitor baseline handshake failed: {error}");
             }
@@ -271,7 +315,7 @@ impl PrivateInterferenceMonitor {
     }
 
     pub fn finish(mut self) -> PrivateInterferenceReceipt {
-        self.stop.store(true, Ordering::Release);
+        self.stop.request_stop();
         let Some(join) = self.join.take() else {
             return PrivateInterferenceReceipt {
                 input_desktop_before: None,
@@ -308,7 +352,7 @@ impl PrivateInterferenceMonitor {
 
 impl Drop for PrivateInterferenceMonitor {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        self.stop.request_stop();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -318,6 +362,15 @@ impl Drop for PrivateInterferenceMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_signal_is_idempotent_and_observable() {
+        let signal = StopSignal::new();
+        assert!(!signal.wait(Duration::ZERO).unwrap());
+        signal.request_stop();
+        signal.request_stop();
+        assert!(signal.wait(Duration::ZERO).unwrap());
+    }
 
     #[test]
     fn clean_requires_complete_and_no_interference() {
