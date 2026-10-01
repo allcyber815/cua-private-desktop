@@ -74,11 +74,6 @@ enum ActorCommand {
         pid: u32,
         reply: mpsc::SyncSender<io::Result<Vec<PrivateWindowInfo>>>,
     },
-    WindowForPidExact {
-        pid: u32,
-        hwnd: u64,
-        reply: mpsc::SyncSender<io::Result<Option<PrivateWindowInfo>>>,
-    },
     SpawnDirectHelper {
         program: PathBuf,
         args: Vec<OsString>,
@@ -221,31 +216,6 @@ impl PrivateDesktopRuntime {
                 io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!("private window actor reply timed out: {error}"),
-                )
-            })?
-    }
-
-    pub fn window_for_pid_exact(
-        &self,
-        pid: u32,
-        hwnd: u64,
-    ) -> io::Result<Option<PrivateWindowInfo>> {
-        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-        self.sender
-            .send(ActorCommand::WindowForPidExact {
-                pid,
-                hwnd,
-                reply: reply_tx,
-            })
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::BrokenPipe, "private desktop actor stopped")
-            })?;
-        reply_rx
-            .recv_timeout(ACTOR_REPLY_TIMEOUT)
-            .map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("private exact-window actor reply timed out: {error}"),
                 )
             })?
     }
@@ -421,9 +391,6 @@ fn actor_main(
             }
             ActorCommand::WindowsForPid { pid, reply } => {
                 let _ = reply.send(core.windows_for_pid(pid));
-            }
-            ActorCommand::WindowForPidExact { pid, hwnd, reply } => {
-                let _ = reply.send(core.window_for_pid_exact(pid, hwnd));
             }
             ActorCommand::SpawnDirectHelper {
                 program,
