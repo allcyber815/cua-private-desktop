@@ -44,6 +44,7 @@ const WAIT_OBJECT_0: Dword = 0;
 const WAIT_TIMEOUT: Dword = 258;
 const INFINITE: Dword = 0xffff_ffff;
 const UOI_NAME: i32 = 2;
+const GA_ROOT: Dword = 2;
 
 static NEXT_DESKTOP_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -155,6 +156,7 @@ unsafe extern "system" {
         lparam: isize,
     ) -> Bool;
     fn GetWindowThreadProcessId(hwnd: Handle, pid: *mut Dword) -> Dword;
+    fn GetAncestor(hwnd: Handle, flags: Dword) -> Handle;
     fn GetWindowTextW(hwnd: Handle, text: *mut u16, max_count: i32) -> i32;
     fn GetClassNameW(hwnd: Handle, class_name: *mut u16, max_count: i32) -> i32;
     fn GetWindowRect(hwnd: Handle, rect: *mut Rect) -> Bool;
@@ -321,6 +323,13 @@ pub(super) fn exact_window_for_pid(
         return Ok(None);
     }
     let hwnd = hwnd as Handle;
+
+    // EnumDesktopWindows only admitted top-level windows. Preserve that exact
+    // contract so an arbitrary child HWND cannot broaden the private target set.
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    if root.is_null() || root != hwnd {
+        return Ok(None);
+    }
 
     let mut owner_pid = 0u32;
     let thread_id = unsafe { GetWindowThreadProcessId(hwnd, &mut owner_pid) };
