@@ -1,21 +1,378 @@
 //! Outer-desktop interference telemetry for strict private-desktop actions.
 //!
-//! The monitor is deliberately born on the caller/default desktop, not on the
-//! private actor. It samples the user's input desktop and foreground owner while
-//! the private action runs, and uses a duplicated Job handle to prove that no
-//! process owned by the private environment became the outer foreground.
+//! A process-lifetime WinEvent observer is deliberately born on the caller /
+//! default desktop, never on the private actor. Each private action records an
+//! event-log cursor plus authoritative before/after samples. Foreground and
+//! desktop-switch events between those samples supplement the direct reads so
+//! a short-lived focus steal cannot hide between polling intervals.
+//!
+//! WinEvent delivery is treated as an invalidation/evidence stream, not as the
+//! sole source of truth: start/end desktop + foreground reads remain
+//! authoritative, ring overflow and observer failure fail closed, and each
+//! observed foreground pid is checked against a duplicated private Job handle.
 
 use super::runtime::PrivateDesktopRuntime;
 use super::win32_private::PrivateJobProbe;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
+use std::collections::VecDeque;
+use std::ffi::c_void;
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::Duration;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
-const SAMPLE_INTERVAL: Duration = Duration::from_millis(20);
+const EVENT_LOG_CAPACITY: usize = 2048;
+const OBSERVER_READY_TIMEOUT: Duration = Duration::from_secs(2);
+
+type Dword = u32;
+type Long = i32;
+type Uint = u32;
+type Wparam = usize;
+type Lparam = isize;
+type Lresult = isize;
+type RawHandle = *mut c_void;
+type WinEventHook = RawHandle;
+
+const EVENT_SYSTEM_FOREGROUND: Dword = 0x0003;
+const EVENT_SYSTEM_DESKTOPSWITCH: Dword = 0x0020;
+const WINEVENT_OUTOFCONTEXT: Dword = 0x0000;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Point {
+    x: Long,
+    y: Long,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Msg {
+    hwnd: RawHandle,
+    message: Uint,
+    wparam: Wparam,
+    lparam: Lparam,
+    time: Dword,
+    pt: Point,
+    l_private: Dword,
+}
+
+impl Default for Msg {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn SetWinEventHook(
+        event_min: Dword,
+        event_max: Dword,
+        hmod_win_event_proc: RawHandle,
+        win_event_proc: Option<
+            unsafe extern "system" fn(WinEventHook, Dword, RawHandle, Long, Long, Dword, Dword),
+        >,
+        process_id: Dword,
+        thread_id: Dword,
+        flags: Dword,
+    ) -> WinEventHook;
+    fn UnhookWinEvent(hook: WinEventHook) -> i32;
+    fn GetMessageW(msg: *mut Msg, hwnd: RawHandle, min: Uint, max: Uint) -> i32;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OuterEventKind {
+    Foreground(Option<u32>),
+    DesktopSwitch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OuterEvent {
+    seq: u64,
+    kind: OuterEventKind,
+}
+
+#[derive(Debug)]
+struct ObserverLog {
+    next_seq: u64,
+    dropped_through_seq: u64,
+    events: VecDeque<OuterEvent>,
+}
+
+impl ObserverLog {
+    fn new() -> Self {
+        Self {
+            next_seq: 0,
+            dropped_through_seq: 0,
+            events: VecDeque::with_capacity(EVENT_LOG_CAPACITY),
+        }
+    }
+
+    fn push(&mut self, kind: OuterEventKind) {
+        self.next_seq = self.next_seq.wrapping_add(1);
+        // A wrapped sequence cannot preserve cursor ordering. Fail-closed by
+        // invalidating every older cursor rather than pretending continuity.
+        if self.next_seq == 0 {
+            self.next_seq = 1;
+            self.events.clear();
+            self.dropped_through_seq = u64::MAX;
+        }
+
+        let event = OuterEvent {
+            seq: self.next_seq,
+            kind,
+        };
+        self.events.push_back(event);
+        while self.events.len() > EVENT_LOG_CAPACITY {
+            if let Some(dropped) = self.events.pop_front() {
+                self.dropped_through_seq = dropped.seq;
+            }
+        }
+    }
+
+    fn cursor(&self) -> u64 {
+        self.next_seq
+    }
+
+    fn events_since(&self, cursor: u64) -> Result<Vec<OuterEvent>, String> {
+        if self.dropped_through_seq == u64::MAX || cursor < self.dropped_through_seq {
+            return Err(format!(
+                "persistent interference event log overflowed after cursor {cursor}"
+            ));
+        }
+        Ok(self
+            .events
+            .iter()
+            .copied()
+            .filter(|event| event.seq > cursor)
+            .collect())
+    }
+}
+
+struct ObserverShared {
+    log: Mutex<ObserverLog>,
+    alive: AtomicBool,
+    log_poisoned: AtomicBool,
+}
+
+impl ObserverShared {
+    fn new() -> Self {
+        Self {
+            log: Mutex::new(ObserverLog::new()),
+            alive: AtomicBool::new(false),
+            log_poisoned: AtomicBool::new(false),
+        }
+    }
+
+    fn push(&self, kind: OuterEventKind) {
+        match self.log.lock() {
+            Ok(mut log) => log.push(kind),
+            Err(_) => self.log_poisoned.store(true, Ordering::Release),
+        }
+    }
+
+    fn cursor(&self) -> Result<u64, String> {
+        if self.log_poisoned.load(Ordering::Acquire) {
+            return Err("persistent interference event log mutex poisoned".into());
+        }
+        self.log
+            .lock()
+            .map(|log| log.cursor())
+            .map_err(|_| "persistent interference event log mutex poisoned".into())
+    }
+
+    fn events_since(&self, cursor: u64) -> Result<Vec<OuterEvent>, String> {
+        if !self.alive.load(Ordering::Acquire) {
+            return Err("persistent interference WinEvent observer is not alive".into());
+        }
+        if self.log_poisoned.load(Ordering::Acquire) {
+            return Err("persistent interference event log mutex poisoned".into());
+        }
+        self.log
+            .lock()
+            .map_err(|_| "persistent interference event log mutex poisoned".to_string())?
+            .events_since(cursor)
+    }
+}
+
+struct PersistentObserver {
+    shared: Arc<ObserverShared>,
+    thread_desktop_name: Option<String>,
+    input_desktop_name_at_start: Option<String>,
+}
+
+static CALLBACK_SHARED: OnceLock<Arc<ObserverShared>> = OnceLock::new();
+static PERSISTENT_OBSERVER: OnceLock<Result<PersistentObserver, String>> = OnceLock::new();
+
+unsafe extern "system" fn win_event_callback(
+    _hook: WinEventHook,
+    event: Dword,
+    hwnd: RawHandle,
+    _id_object: Long,
+    _id_child: Long,
+    _event_thread: Dword,
+    _event_time: Dword,
+) {
+    let Some(shared) = CALLBACK_SHARED.get() else {
+        return;
+    };
+
+    match event {
+        EVENT_SYSTEM_FOREGROUND => {
+            let pid = if hwnd.is_null() {
+                None
+            } else {
+                let mut pid = 0u32;
+                let thread_id = GetWindowThreadProcessId(HWND(hwnd), Some(&mut pid));
+                (thread_id != 0 && pid != 0).then_some(pid)
+            };
+            shared.push(OuterEventKind::Foreground(pid));
+        }
+        EVENT_SYSTEM_DESKTOPSWITCH => shared.push(OuterEventKind::DesktopSwitch),
+        _ => {}
+    }
+}
+
+impl PersistentObserver {
+    fn start() -> Result<Self, String> {
+        let shared = Arc::new(ObserverShared::new());
+        CALLBACK_SHARED.set(shared.clone()).map_err(|_| {
+            "persistent interference callback state was already initialized".to_string()
+        })?;
+
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let shared_for_thread = shared.clone();
+        let join = thread::Builder::new()
+            .name("cua-private-interference-events".into())
+            .spawn(move || {
+                let desktop = crate::diagnostics::desktop_state();
+                let thread_desktop_name = desktop.thread_desktop_name.clone();
+                let input_desktop_name = desktop.input_desktop_name.clone();
+
+                let identity_ok = match (
+                    thread_desktop_name.as_deref(),
+                    input_desktop_name.as_deref(),
+                ) {
+                    (Some(thread_name), Some(input_name))
+                        if thread_name.eq_ignore_ascii_case(input_name) =>
+                    {
+                        Ok(())
+                    }
+                    (Some(thread_name), Some(input_name)) => Err(format!(
+                        "persistent interference observer is not attached to the input desktop: thread={thread_name:?}, input={input_name:?}"
+                    )),
+                    _ => Err(format!(
+                        "persistent interference observer desktop authority unavailable: thread={:?}, input={:?}, input_error={:?}",
+                        thread_desktop_name,
+                        input_desktop_name,
+                        desktop.input_desktop_error
+                    )),
+                };
+
+                if let Err(error) = identity_ok {
+                    let _ = ready_tx.send(Err(error));
+                    return;
+                }
+
+                let foreground_hook = unsafe {
+                    SetWinEventHook(
+                        EVENT_SYSTEM_FOREGROUND,
+                        EVENT_SYSTEM_FOREGROUND,
+                        null_mut(),
+                        Some(win_event_callback),
+                        0,
+                        0,
+                        WINEVENT_OUTOFCONTEXT,
+                    )
+                };
+                if foreground_hook.is_null() {
+                    let _ = ready_tx.send(Err(format!(
+                        "SetWinEventHook(EVENT_SYSTEM_FOREGROUND) failed: {}",
+                        std::io::Error::last_os_error()
+                    )));
+                    return;
+                }
+
+                let desktop_hook = unsafe {
+                    SetWinEventHook(
+                        EVENT_SYSTEM_DESKTOPSWITCH,
+                        EVENT_SYSTEM_DESKTOPSWITCH,
+                        null_mut(),
+                        Some(win_event_callback),
+                        0,
+                        0,
+                        WINEVENT_OUTOFCONTEXT,
+                    )
+                };
+                if desktop_hook.is_null() {
+                    unsafe {
+                        let _ = UnhookWinEvent(foreground_hook);
+                    }
+                    let _ = ready_tx.send(Err(format!(
+                        "SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH) failed: {}",
+                        std::io::Error::last_os_error()
+                    )));
+                    return;
+                }
+
+                shared_for_thread.alive.store(true, Ordering::Release);
+                let _ = ready_tx.send(Ok((
+                    thread_desktop_name,
+                    input_desktop_name,
+                )));
+
+                let mut msg = Msg::default();
+                loop {
+                    let status = unsafe { GetMessageW(&mut msg, null_mut(), 0, 0) };
+                    if status <= 0 {
+                        break;
+                    }
+                }
+
+                shared_for_thread.alive.store(false, Ordering::Release);
+                unsafe {
+                    let _ = UnhookWinEvent(foreground_hook);
+                    let _ = UnhookWinEvent(desktop_hook);
+                }
+            })
+            .map_err(|error| format!("failed to spawn persistent interference observer: {error}"))?;
+
+        let identity = ready_rx
+            .recv_timeout(OBSERVER_READY_TIMEOUT)
+            .map_err(|error| {
+                format!("persistent interference observer startup timed out: {error}")
+            })??;
+
+        // The observer intentionally lives for the Driver process lifetime.
+        // Dropping JoinHandle detaches the thread; the thread owns no private
+        // Job/Desktop handles and therefore cannot extend a session lifetime.
+        drop(join);
+
+        Ok(Self {
+            shared,
+            thread_desktop_name: identity.0,
+            input_desktop_name_at_start: identity.1,
+        })
+    }
+
+    fn get() -> Result<&'static Self> {
+        match PERSISTENT_OBSERVER.get_or_init(Self::start) {
+            Ok(observer) => Ok(observer),
+            Err(error) => Err(anyhow::anyhow!(error.clone())),
+        }
+    }
+
+    fn cursor(&self) -> Result<u64, String> {
+        self.shared.cursor()
+    }
+
+    fn events_since(&self, cursor: u64) -> Result<Vec<OuterEvent>, String> {
+        self.shared.events_since(cursor)
+    }
+}
 
 #[derive(Clone, Debug)]
 struct MonitorState {
@@ -34,12 +391,12 @@ struct MonitorState {
 }
 
 impl MonitorState {
-    fn new(target_pid: u32) -> Self {
+    fn new(target_pid: u32, monitor_thread_desktop: Option<String>) -> Self {
         Self {
             target_pid,
             input_desktop_before: None,
             input_desktop_after: None,
-            monitor_thread_desktop: None,
+            monitor_thread_desktop,
             outer_foreground_before_pid: 0,
             outer_foreground_after_pid: 0,
             input_desktop_changed: false,
@@ -96,7 +453,9 @@ impl PrivateInterferenceReceipt {
             "sample_count": self.sample_count,
             "errors": self.errors,
             "clean": self.clean(),
-            "sample_interval_ms": SAMPLE_INTERVAL.as_millis() as u64,
+            "monitor_mode": "persistent_win_event",
+            "sample_interval_ms": 0,
+            "event_log_capacity": EVENT_LOG_CAPACITY as u64,
         })
     }
 }
@@ -134,7 +493,23 @@ fn foreground_pid(hwnd: Option<usize>) -> Result<u32, String> {
     Ok(pid)
 }
 
-fn sample(probe: &PrivateJobProbe, state: &mut MonitorState) {
+fn observe_foreground_pid(probe: &PrivateJobProbe, state: &mut MonitorState, pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    if pid == state.target_pid {
+        state.target_observed_on_outer_foreground = true;
+    }
+    match probe.contains_pid(pid) {
+        Ok(true) => state.owned_job_process_observed_on_outer_foreground = true,
+        Ok(false) => {}
+        Err(error) => state.fail(format!(
+            "private Job membership probe failed for outer foreground pid {pid}: {error}"
+        )),
+    }
+}
+
+fn sample_current(probe: &PrivateJobProbe, state: &mut MonitorState, first: bool) {
     let desktop = crate::diagnostics::desktop_state();
     state.sample_count += 1;
 
@@ -152,19 +527,17 @@ fn sample(probe: &PrivateJobProbe, state: &mut MonitorState) {
         }
     };
 
-    if state.sample_count == 1 {
+    if first {
         state.input_desktop_before = input_name.clone();
-        state.monitor_thread_desktop = desktop.thread_desktop_name.clone();
         match (
             state.monitor_thread_desktop.as_deref(),
             state.input_desktop_before.as_deref(),
         ) {
-            (Some(thread_name), Some(input_name)) if thread_name.eq_ignore_ascii_case(input_name) => {
-            }
+            (Some(thread_name), Some(input_name)) if thread_name.eq_ignore_ascii_case(input_name) => {}
             (Some(thread_name), Some(input_name)) => state.fail(format!(
-                "interference monitor is not attached to the input desktop: thread={thread_name:?}, input={input_name:?}"
+                "persistent interference observer is not attached to the input desktop: thread={thread_name:?}, input={input_name:?}"
             )),
-            _ => state.fail("interference monitor desktop authority could not be established"),
+            _ => state.fail("persistent interference observer desktop authority could not be established"),
         }
     } else if let (Some(before), Some(current)) =
         (state.input_desktop_before.as_deref(), input_name.as_deref())
@@ -182,141 +555,63 @@ fn sample(probe: &PrivateJobProbe, state: &mut MonitorState) {
             0
         }
     };
-    if state.sample_count == 1 {
+    if first {
         state.outer_foreground_before_pid = pid;
     }
     state.outer_foreground_after_pid = pid;
-
-    if pid != 0 {
-        if pid == state.target_pid {
-            state.target_observed_on_outer_foreground = true;
-        }
-        match probe.contains_pid(pid) {
-            Ok(true) => state.owned_job_process_observed_on_outer_foreground = true,
-            Ok(false) => {}
-            Err(error) => state.fail(format!(
-                "private Job membership probe failed for outer foreground pid {pid}: {error}"
-            )),
-        }
-    }
-}
-
-struct StopSignal {
-    stopped: Mutex<bool>,
-    wake: Condvar,
-}
-
-impl StopSignal {
-    fn new() -> Self {
-        Self {
-            stopped: Mutex::new(false),
-            wake: Condvar::new(),
-        }
-    }
-
-    fn request_stop(&self) {
-        let mut stopped = match self.stopped.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        *stopped = true;
-        self.wake.notify_all();
-    }
-
-    fn wait(&self, timeout: Duration) -> Result<bool, String> {
-        let stopped = self
-            .stopped
-            .lock()
-            .map_err(|_| "interference stop signal mutex poisoned".to_string())?;
-        let (stopped, _) = self
-            .wake
-            .wait_timeout_while(stopped, timeout, |stopped| !*stopped)
-            .map_err(|_| "interference stop signal wait poisoned".to_string())?;
-        Ok(*stopped)
-    }
+    observe_foreground_pid(probe, state, pid);
 }
 
 pub struct PrivateInterferenceMonitor {
-    stop: Arc<StopSignal>,
-    join: Option<JoinHandle<MonitorState>>,
+    observer: &'static PersistentObserver,
+    cursor: u64,
+    probe: PrivateJobProbe,
+    state: Option<MonitorState>,
 }
 
 impl PrivateInterferenceMonitor {
     pub fn start(environment: &PrivateDesktopRuntime, target_pid: u32) -> Result<Self> {
+        let observer = PersistentObserver::get()
+            .context("persistent outer-desktop WinEvent observer is unavailable")?;
         let probe = environment
             .duplicate_job_probe()
             .context("could not duplicate private Job handle for interference telemetry")?;
-        let stop = Arc::new(StopSignal::new());
-        let stop_for_thread = stop.clone();
-        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
 
-        let join = thread::Builder::new()
-            .name("cua-private-interference-monitor".into())
-            .spawn(move || {
-                let mut state = MonitorState::new(target_pid);
-                sample(&probe, &mut state);
-                let baseline = if !state.telemetry_complete {
-                    Err(format!(
-                        "interference telemetry baseline is not authoritative: {}",
-                        state.errors.join("; ")
-                    ))
-                } else if state.target_observed_on_outer_foreground
-                    || state.owned_job_process_observed_on_outer_foreground
-                {
-                    Err("private Job already owns the user's outer foreground before action dispatch".to_string())
-                } else {
-                    Ok(())
-                };
-                let baseline_ok = baseline.is_ok();
-                let _ = ready_tx.send(baseline);
-                if !baseline_ok {
-                    return state;
-                }
+        if observer.input_desktop_name_at_start.is_none() {
+            bail!("persistent interference observer input-desktop identity is unavailable");
+        }
 
-                loop {
-                    let stopping = match stop_for_thread.wait(SAMPLE_INTERVAL) {
-                        Ok(stopping) => stopping,
-                        Err(error) => {
-                            state.fail(error);
-                            true
-                        }
-                    };
-                    // Keep the old evidence contract: every periodic wake and
-                    // the final stop wake are followed by an authoritative
-                    // sample. The stop wake is now immediate instead of waiting
-                    // for the remainder of an unconditional 20 ms sleep.
-                    sample(&probe, &mut state);
-                    if stopping {
-                        break;
-                    }
-                }
-                state
-            })
-            .context("failed to spawn private interference monitor")?;
+        // Cursor first: any foreground/desktop-switch event racing with the
+        // authoritative baseline is then included in finish()'s event slice.
+        let cursor = observer
+            .cursor()
+            .map_err(anyhow::Error::msg)
+            .context("could not capture persistent interference event cursor")?;
 
-        match ready_rx.recv_timeout(Duration::from_secs(2)) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                stop.request_stop();
-                let _ = join.join();
-                bail!("{error}");
-            }
-            Err(error) => {
-                stop.request_stop();
-                let _ = join.join();
-                bail!("interference monitor baseline handshake failed: {error}");
-            }
+        let mut state = MonitorState::new(target_pid, observer.thread_desktop_name.clone());
+        sample_current(&probe, &mut state, true);
+        if !state.telemetry_complete {
+            bail!(
+                "interference telemetry baseline is not authoritative: {}",
+                state.errors.join("; ")
+            );
+        }
+        if state.target_observed_on_outer_foreground
+            || state.owned_job_process_observed_on_outer_foreground
+        {
+            bail!("private Job already owns the user's outer foreground before action dispatch");
         }
 
         Ok(Self {
-            stop,
-            join: Some(join),
+            observer,
+            cursor,
+            probe,
+            state: Some(state),
         })
     }
 
     pub fn finish(mut self) -> PrivateInterferenceReceipt {
-        self.stop.request_stop();
-        let Some(join) = self.join.take() else {
+        let Some(mut state) = self.state.take() else {
             return PrivateInterferenceReceipt {
                 input_desktop_before: None,
                 input_desktop_after: None,
@@ -328,34 +623,43 @@ impl PrivateInterferenceMonitor {
                 owned_job_process_observed_on_outer_foreground: false,
                 interference_telemetry_complete: false,
                 sample_count: 0,
-                errors: vec!["interference monitor join handle missing".into()],
+                errors: vec!["persistent interference monitor state missing".into()],
             };
         };
-        match join.join() {
-            Ok(state) => state.into(),
-            Err(_) => PrivateInterferenceReceipt {
-                input_desktop_before: None,
-                input_desktop_after: None,
-                monitor_thread_desktop: None,
-                outer_foreground_before_pid: 0,
-                outer_foreground_after_pid: 0,
-                input_desktop_changed: false,
-                target_observed_on_outer_foreground: false,
-                owned_job_process_observed_on_outer_foreground: false,
-                interference_telemetry_complete: false,
-                sample_count: 0,
-                errors: vec!["interference monitor thread panicked".into()],
-            },
+
+        match self.observer.events_since(self.cursor) {
+            Ok(events) => {
+                for event in events {
+                    state.sample_count += 1;
+                    match event.kind {
+                        OuterEventKind::Foreground(Some(pid)) => {
+                            observe_foreground_pid(&self.probe, &mut state, pid);
+                        }
+                        OuterEventKind::Foreground(None) => state.fail(
+                            "persistent interference observer saw foreground change but could not resolve pid",
+                        ),
+                        OuterEventKind::DesktopSwitch => {
+                            state.input_desktop_changed = true;
+                        }
+                    }
+                }
+            }
+            Err(error) => state.fail(error),
         }
+
+        // Final direct read is authoritative for the terminal state and catches
+        // observer blind spots. A desktop switch away-and-back is still caught
+        // by the WinEvent stream above.
+        sample_current(&self.probe, &mut state, false);
+        state.into()
     }
 }
 
 impl Drop for PrivateInterferenceMonitor {
     fn drop(&mut self) {
-        self.stop.request_stop();
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
+        // No per-action worker exists in v2. The process-lifetime observer owns
+        // no private session handles; dropping an unfinished monitor therefore
+        // only discards its cursor/state.
     }
 }
 
@@ -363,13 +667,46 @@ impl Drop for PrivateInterferenceMonitor {
 mod tests {
     use super::*;
 
+    fn fg(seq: u64, pid: u32) -> OuterEvent {
+        OuterEvent {
+            seq,
+            kind: OuterEventKind::Foreground(Some(pid)),
+        }
+    }
+
     #[test]
-    fn stop_signal_is_idempotent_and_observable() {
-        let signal = StopSignal::new();
-        assert!(!signal.wait(Duration::ZERO).unwrap());
-        signal.request_stop();
-        signal.request_stop();
-        assert!(signal.wait(Duration::ZERO).unwrap());
+    fn observer_log_returns_only_events_after_cursor() {
+        let mut log = ObserverLog::new();
+        log.push(OuterEventKind::Foreground(Some(10)));
+        let cursor = log.cursor();
+        log.push(OuterEventKind::Foreground(Some(20)));
+        log.push(OuterEventKind::DesktopSwitch);
+
+        let events = log.events_since(cursor).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, OuterEventKind::Foreground(Some(20)));
+        assert_eq!(events[1].kind, OuterEventKind::DesktopSwitch);
+    }
+
+    #[test]
+    fn observer_log_overflow_fails_old_cursor_closed() {
+        let mut log = ObserverLog::new();
+        let cursor = log.cursor();
+        for pid in 1..=(EVENT_LOG_CAPACITY as u32 + 1) {
+            log.push(OuterEventKind::Foreground(Some(pid)));
+        }
+        assert!(log.events_since(cursor).is_err());
+
+        let current = log.cursor();
+        assert!(log.events_since(current).unwrap().is_empty());
+    }
+
+    #[test]
+    fn outer_event_shape_is_copyable() {
+        let event = fg(7, 42);
+        let copy = event;
+        assert_eq!(copy.seq, 7);
+        assert_eq!(copy.kind, OuterEventKind::Foreground(Some(42)));
     }
 
     #[test]
