@@ -31,6 +31,7 @@ pub mod private_visual_worker_client;
 #[cfg(target_os = "windows")]
 pub use runtime::{
     ExecutionEnvironmentRegistry, PrivateDesktopRuntime as PrivateEnvironmentHandle,
+    PrivateTargetProfile,
 };
 
 #[cfg(all(target_os = "windows", test))]
