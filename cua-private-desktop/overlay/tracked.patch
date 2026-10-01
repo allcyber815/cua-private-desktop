@@ -7242,6 +7242,29 @@ index 19139b20932b6634978ca9e27cc29a21cc049411..0e3fad94250909ee4bd5d058dcc79fb4
  impl SnapshotPayload for CachedSnapshot {
      type Element = RetainedElement;
  
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/uia/cache_uaf_repro.rs b/libs/cua-driver/rust/crates/platform-windows/src/uia/cache_uaf_repro.rs
+index 9f6e95d0fb1cc40ff1eac8e8d6a60508c61af296..80f359992b2e82b0705d2d382fcbd48e73b75e1f 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/uia/cache_uaf_repro.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/uia/cache_uaf_repro.rs
+@@ -108,12 +108,17 @@ fn snapshot_with(ptrs: Vec<usize>) -> CachedSnapshot {
+     CachedSnapshot {
+         elements: ptrs
+             .into_iter()
+-            .map(|ptr| RetainedElement {
++            .enumerate()
++            .map(|(element_index, ptr)| RetainedElement {
+                 ptr,
+                 kind: SnapshotKind::Uia,
+                 center: (0, 0),
+                 rect: None,
+                 msaa_role: None,
++                element_index,
++                verification_role: String::new(),
++                verification_label: None,
++                trusted_for_verification: false,
+             })
+             .collect(),
+     }
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs b/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs
 index 6a15ce99b4341a2d0aec940e5a884e52d6965c86..58faa83c3eb3d8533d2771560d95bdb13f3a11a3 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs
