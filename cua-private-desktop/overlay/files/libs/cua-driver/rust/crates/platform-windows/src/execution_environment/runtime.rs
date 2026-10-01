@@ -6,8 +6,8 @@
 //! thread start. Commands are serialized so private GUI mutations cannot race.
 
 use super::win32_private::{
-    attach_current_thread_to, current_thread_desktop_name, PrivateChild, PrivateDesktopCore,
-    PrivateJobProbe, PrivateWindowInfo,
+    attach_current_thread_to, current_thread_desktop_name, exact_window_for_pid, PrivateChild,
+    PrivateDesktopCore, PrivateJobProbe, PrivateWindowInfo,
 };
 use super::{IsolationMode, PrivateFramework};
 use std::cell::Cell;
@@ -218,6 +218,14 @@ impl PrivateDesktopRuntime {
                     format!("private window actor reply timed out: {error}"),
                 )
             })?
+    }
+
+    pub fn window_for_pid_exact(
+        &self,
+        pid: u32,
+        hwnd: u64,
+    ) -> io::Result<Option<PrivateWindowInfo>> {
+        exact_window_for_pid(&self.desktop_name, pid, hwnd)
     }
 
     pub fn spawn_direct_helper(

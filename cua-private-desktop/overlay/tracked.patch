@@ -4648,40 +4648,40 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
 +    hwnd: u64,
 +    action: crate::execution_environment::PrivateSemanticAction,
 +) -> Result<PrivateSemanticGate, ToolResult> {
-+    let environment_for_windows = environment.clone();
-+    let windows =
-+        match tokio::task::spawn_blocking(move || environment_for_windows.windows_for_pid(pid))
-+            .await
-+        {
-+            Ok(Ok(windows)) => windows,
-+            Ok(Err(error)) => {
-+                return Err(ToolResult::error(format!(
-+                    "private_desktop target discovery failed: {error}"
-+                ))
-+                .with_structured(json!({
-+                    "code": "private_target_discovery_failed",
-+                    "isolation_mode": "private_desktop",
-+                    "pid": pid,
-+                    "window_id": hwnd,
-+                })));
-+            }
-+            Err(error) => {
-+                return Err(ToolResult::error(format!(
-+                    "private_desktop target discovery task failed: {error}"
-+                ))
-+                .with_structured(json!({
-+                    "code": "private_target_discovery_failed",
-+                    "isolation_mode": "private_desktop",
-+                    "pid": pid,
-+                    "window_id": hwnd,
-+                })));
-+            }
-+        };
-+
-+    let window = match windows
-+        .into_iter()
-+        .find(|window| window.hwnd as u64 == hwnd)
++    // Exact HWND validation preserves the same PID + private-HDESK
++    // fail-closed ownership proof without a desktop-wide enumeration.
++    let environment_for_window = environment.clone();
++    let window = match tokio::task::spawn_blocking(move || {
++        environment_for_window.window_for_pid_exact(pid, hwnd)
++    })
++    .await
 +    {
++        Ok(Ok(window)) => window,
++        Ok(Err(error)) => {
++            return Err(ToolResult::error(format!(
++                "private_desktop target discovery failed: {error}"
++            ))
++            .with_structured(json!({
++                "code": "private_target_discovery_failed",
++                "isolation_mode": "private_desktop",
++                "pid": pid,
++                "window_id": hwnd,
++            })));
++        }
++        Err(error) => {
++            return Err(ToolResult::error(format!(
++                "private_desktop target discovery task failed: {error}"
++            ))
++            .with_structured(json!({
++                "code": "private_target_discovery_failed",
++                "isolation_mode": "private_desktop",
++                "pid": pid,
++                "window_id": hwnd,
++            })));
++        }
++    };
++
++    let window = match window {
 +        Some(window) => window,
 +        None => {
 +            return Err(ToolResult::error(format!(
