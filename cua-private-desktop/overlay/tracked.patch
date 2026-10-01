@@ -7101,46 +7101,67 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..30663645de832cac94cbaca4ceb93712
  #[cfg(test)]
  mod chromium_flag_injection_tests;
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs b/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
-index 19139b20932b6634978ca9e27cc29a21cc049411..eed4c19d3fb5d6ae2d37cc689e2213a36b837a84 100644
+index 19139b20932b6634978ca9e27cc29a21cc049411..b41f74511c43c5066ee4b642d3994eaf6f925609 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
-@@ -1,7 +1,12 @@
+@@ -1,7 +1,15 @@
  use super::UiaNode;
  use cua_driver_core::element_cache::{ElementCacheCore, SnapshotPayload};
  use windows::core::Interface;
 -use windows::Win32::UI::Accessibility::{IAccessible, IUIAutomationElement};
 +use windows::Win32::Foundation::HWND;
++use windows::Win32::System::Com::{
++    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
++};
 +use windows::Win32::UI::Accessibility::{
-+    IAccessible, IUIAutomationElement, UIA_HelpTextPropertyId, UIA_IsEnabledPropertyId,
-+    UIA_ValueValuePropertyId,
++    CUIAutomation, IAccessible, IUIAutomation, IUIAutomationElement, UIA_HelpTextPropertyId,
++    UIA_IsEnabledPropertyId, UIA_ValueValuePropertyId,
 +};
 +use windows::Win32::UI::WindowsAndMessaging::IsChild;
  
  pub type ElementCache = ElementCacheCore<CachedSnapshot>;
  
-@@ -44,6 +49,47 @@ impl RetainedElement {
+@@ -44,6 +52,65 @@ impl RetainedElement {
          std::mem::forget(element);
          focused
      }
 +
-+    /// Re-read only the properties needed to prove a current positive
-+    /// existence witness. This deliberately refuses UIA-only peers without a
-+    /// native HWND so stale snapshots can never prove membership in a different
-+    /// top-level window of the same process.
++    /// Re-prove a current positive existence witness without walking the
++    /// subtree. The retained COM object is used only to recover its native HWND
++    /// candidate. All identity and semantic properties are then read from a
++    /// fresh UIA element resolved from that HWND. This is required because a
++    /// retained provider proxy can keep returning stale properties after the
++    /// underlying control is destroyed and Windows reuses the same numeric HWND.
 +    pub fn live_positive_entry(&self, pid: u32, root_hwnd: u64) -> Option<serde_json::Value> {
 +        if !self.is_uia() || self.ptr == 0 || pid == 0 || root_hwnd == 0 {
 +            return None;
 +        }
-+        let element = std::mem::ManuallyDrop::new(unsafe {
++
++        let retained = std::mem::ManuallyDrop::new(unsafe {
 +            IUIAutomationElement::from_raw(self.ptr as *mut _)
 +        });
++        let candidate_hwnd = unsafe { retained.CurrentNativeWindowHandle() }.ok()?;
++        let root = HWND(root_hwnd as *mut _);
++        if candidate_hwnd.0.is_null()
++            || (candidate_hwnd != root && !unsafe { IsChild(root, candidate_hwnd) }.as_bool())
++        {
++            return None;
++        }
++
++        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
++        let automation: IUIAutomation =
++            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok()?;
++        let element = unsafe { automation.ElementFromHandle(candidate_hwnd) }.ok()?;
++
 +        let current_pid = unsafe { element.CurrentProcessId() }.ok()?;
 +        if current_pid <= 0 || current_pid as u32 != pid {
 +            return None;
 +        }
 +        let native = unsafe { element.CurrentNativeWindowHandle() }.ok()?;
-+        let root = HWND(root_hwnd as *mut _);
-+        if native.0.is_null() || (native != root && !unsafe { IsChild(root, native) }.as_bool()) {
++        if native.0.is_null()
++            || native != candidate_hwnd
++            || (native != root && !unsafe { IsChild(root, native) }.as_bool())
++        {
 +            return None;
 +        }
 +
@@ -7166,7 +7187,7 @@ index 19139b20932b6634978ca9e27cc29a21cc049411..eed4c19d3fb5d6ae2d37cc689e2213a3
  }
  
  impl Clone for RetainedElement {
-@@ -115,6 +161,14 @@ impl CachedSnapshot {
+@@ -115,6 +182,14 @@ impl CachedSnapshot {
                  .collect(),
          }
      }
