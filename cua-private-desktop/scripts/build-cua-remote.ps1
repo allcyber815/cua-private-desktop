@@ -20,10 +20,10 @@ $BuildRoot = Join-Path $TempRoot 'webgpt-cua-private-desktop'
 $BuildSourceCommit = if ($IsGitHubActions -and $env:GITHUB_SHA) { $env:GITHUB_SHA } else { (git -C $RepoRoot rev-parse HEAD).Trim() }
 $RustRoot = Join-Path $BuildRoot 'libs\cua-driver\rust'
 $Target = 'x86_64-pc-windows-msvc'
-$UpstreamVersion = '0.30.4'
-$UpstreamCommit = 'bf6c76786d938070f4ecf1e44004752f69f518b8'
-$OfficialAssetSha256 = '7b0ec893797fdeb0514d96f5797ad6aa53617eadcba2e47856461f60140c757b'
-$OfficialAssetUrl = 'https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.30.4/cua-driver-rs-0.30.4-windows-x86_64-binary.zip'
+$UpstreamVersion = '0.31.0'
+$UpstreamCommit = '5272e492d61b96caf08e3bf434d91126c1f3dccc'
+$OfficialAssetSha256 = '461c7d4acd12685ab777fa4a3800e25f75d2f06e8a67ab7a1778701eb25e6728'
+$OfficialAssetUrl = 'https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.31.0/cua-driver-rs-0.31.0-windows-x86_64-binary.zip'
 
 & $Materializer -Destination $BuildRoot -Force
 if ($LASTEXITCODE -ne 0) { throw 'CUA materialization failed' }
@@ -73,8 +73,8 @@ New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 Copy-Item (Join-Path $RustRoot "target\$Target\release\cua-driver.exe") (Join-Path $OutputDir 'cua-driver.exe') -Force
 Copy-Item (Join-Path $RustRoot "target\$Target\release\private_visual_worker.exe") (Join-Path $OutputDir 'private_visual_worker.exe') -Force
 
-$OfficialZip = Join-Path $TempRoot 'cua-driver-0.30.4-official.zip'
-$OfficialExtract = Join-Path $TempRoot 'cua-driver-0.30.4-official'
+$OfficialZip = Join-Path $TempRoot 'cua-driver-0.31.0-official.zip'
+$OfficialExtract = Join-Path $TempRoot 'cua-driver-0.31.0-official'
 Invoke-WebRequest -Uri $OfficialAssetUrl -OutFile $OfficialZip
 $actualOfficialSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $OfficialZip).Hash.ToLowerInvariant()
 if ($actualOfficialSha -ne $OfficialAssetSha256) {

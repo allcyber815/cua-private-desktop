@@ -1,6 +1,6 @@
 # CUA private-desktop overlay
 
-This directory captures the WebGPT private-desktop delta rebased onto the exact CUA 0.30.4 commit pinned in the bundle's `upstreams.toml`. The 0.30.4 semantic rebase preserves the established WebGPT private-desktop behavior. GitHub Actions Windows is the preferred deep-build lane; when that lane is unavailable, the same pinned build pipeline can be run explicitly on the local Windows host with `-AllowLocalBuild`. The rebase preserves CUA 0.30.2's walk budgets, screenshot ownership, timeout, snapshot-lifetime, and browser-installation safety contracts while retaining private-desktop semantic/value actions, background input delivery, attached UIA, trusted PrintWindow capture, interference receipts, and session-aware verification.
+This directory captures the WebGPT private-desktop delta rebased onto the exact CUA 0.31.0 commit pinned in the bundle's `upstreams.toml`. The semantic rebase preserves CUA 0.31.0's element-token-only action addressing, snapshot replacement/invalidation behavior, walk budgets, screenshot ownership, timeout, and browser-installation safety contracts while retaining the WebGPT private-desktop semantic/value actions, background input delivery, attached UIA, trusted PrintWindow capture, interference receipts, and session-aware verification. GitHub Actions Windows is the authoritative deep-build lane; when that lane is unavailable, the same pinned build pipeline can be run explicitly on the local Windows host with `-AllowLocalBuild`.
 
 - `tracked.patch` contains modifications to files already tracked by upstream CUA, including the additive ABI 1.2 daemon-connect seam retained by the promoted CUA private-desktop overlay.
 - `files/` contains new text/source files introduced by the private-desktop implementation.
@@ -40,4 +40,4 @@ The lower-level environment contract used by the runner is:
 
 Electron and Chromium test profiles are created under `%TEMP%` and removed after a successful test. External provider runtimes and generated binaries remain non-canonical, regenerable conformance inputs rather than repository or production-runtime dependencies.
 
-The overlay is maintained CUA source owned by the WebGPT MCP control plane, not a claim that CUA upstream has adopted these changes. Materialization must start from the pinned commit and fail if the patch no longer applies cleanly.
+The overlay is maintained CUA source owned by this repository, not a claim that CUA upstream has adopted these changes. Materialization must start from the pinned commit and fail if the patch no longer applies cleanly.
