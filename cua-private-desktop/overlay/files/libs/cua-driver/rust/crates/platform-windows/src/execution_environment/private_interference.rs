@@ -137,17 +137,32 @@ impl ObserverLog {
         self.next_seq
     }
 
-    fn events_since(&self, cursor: u64) -> Result<Vec<OuterEvent>, String> {
-        if self.dropped_through_seq == u64::MAX || cursor < self.dropped_through_seq {
+    fn events_between(
+        &self,
+        start_cursor: u64,
+        end_cursor: u64,
+    ) -> Result<Vec<OuterEvent>, String> {
+        if end_cursor < start_cursor {
             return Err(format!(
-                "persistent interference event log overflowed after cursor {cursor}"
+                "persistent interference event cursor regressed: start={start_cursor}, end={end_cursor}"
+            ));
+        }
+        if self.dropped_through_seq == u64::MAX || start_cursor < self.dropped_through_seq {
+            return Err(format!(
+                "persistent interference event log overflowed after cursor {start_cursor}"
+            ));
+        }
+        if end_cursor > self.next_seq {
+            return Err(format!(
+                "persistent interference end cursor {end_cursor} exceeds current cursor {}",
+                self.next_seq
             ));
         }
         Ok(self
             .events
             .iter()
             .copied()
-            .filter(|event| event.seq > cursor)
+            .filter(|event| event.seq > start_cursor && event.seq <= end_cursor)
             .collect())
     }
 }
@@ -184,7 +199,11 @@ impl ObserverShared {
             .map_err(|_| "persistent interference event log mutex poisoned".into())
     }
 
-    fn events_since(&self, cursor: u64) -> Result<Vec<OuterEvent>, String> {
+    fn events_between(
+        &self,
+        start_cursor: u64,
+        end_cursor: u64,
+    ) -> Result<Vec<OuterEvent>, String> {
         if !self.alive.load(Ordering::Acquire) {
             return Err("persistent interference WinEvent observer is not alive".into());
         }
@@ -194,7 +213,7 @@ impl ObserverShared {
         self.log
             .lock()
             .map_err(|_| "persistent interference event log mutex poisoned".to_string())?
-            .events_since(cursor)
+            .events_between(start_cursor, end_cursor)
     }
 }
 
@@ -369,8 +388,12 @@ impl PersistentObserver {
         self.shared.cursor()
     }
 
-    fn events_since(&self, cursor: u64) -> Result<Vec<OuterEvent>, String> {
-        self.shared.events_since(cursor)
+    fn events_between(
+        &self,
+        start_cursor: u64,
+        end_cursor: u64,
+    ) -> Result<Vec<OuterEvent>, String> {
+        self.shared.events_between(start_cursor, end_cursor)
     }
 }
 
@@ -627,7 +650,20 @@ impl PrivateInterferenceMonitor {
             };
         };
 
-        match self.observer.events_since(self.cursor) {
+        // Establish the terminal state first, then freeze the event-log
+        // boundary. Any foreground/desktop-switch event that races with the
+        // final direct read is therefore included in the bounded event slice.
+        // Events after end_cursor are outside this action's acceptance window.
+        sample_current(&self.probe, &mut state, false);
+        let end_cursor = match self.observer.cursor() {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                state.fail(error);
+                return state.into();
+            }
+        };
+
+        match self.observer.events_between(self.cursor, end_cursor) {
             Ok(events) => {
                 for event in events {
                     state.sample_count += 1;
@@ -647,10 +683,6 @@ impl PrivateInterferenceMonitor {
             Err(error) => state.fail(error),
         }
 
-        // Final direct read is authoritative for the terminal state and catches
-        // observer blind spots. A desktop switch away-and-back is still caught
-        // by the WinEvent stream above.
-        sample_current(&self.probe, &mut state, false);
         state.into()
     }
 }
@@ -682,7 +714,8 @@ mod tests {
         log.push(OuterEventKind::Foreground(Some(20)));
         log.push(OuterEventKind::DesktopSwitch);
 
-        let events = log.events_since(cursor).unwrap();
+        let end_cursor = log.cursor();
+        let events = log.events_between(cursor, end_cursor).unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].kind, OuterEventKind::Foreground(Some(20)));
         assert_eq!(events[1].kind, OuterEventKind::DesktopSwitch);
@@ -695,10 +728,9 @@ mod tests {
         for pid in 1..=(EVENT_LOG_CAPACITY as u32 + 1) {
             log.push(OuterEventKind::Foreground(Some(pid)));
         }
-        assert!(log.events_since(cursor).is_err());
-
         let current = log.cursor();
-        assert!(log.events_since(current).unwrap().is_empty());
+        assert!(log.events_between(cursor, current).is_err());
+        assert!(log.events_between(current, current).unwrap().is_empty());
     }
 
     #[test]
