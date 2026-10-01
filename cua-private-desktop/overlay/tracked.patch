@@ -245,27 +245,62 @@ index 54eab02f3718831008fd440d8c3d39bb1191a6f6..ba84e1051b96e2390064e5e37a6021df
  }
  
  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/element_cache.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/element_cache.rs
+index 6d7135391092ec96c0b69ddd6cc978dc7cbdcb53..93bee11d3c94f60af338115c7c6aab403545fd7a 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/element_cache.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/element_cache.rs
+@@ -284,6 +284,28 @@ impl<S: SnapshotPayload> ElementCacheCore<S> {
+         Some(id)
+     }
+ 
++    /// Retain every element from the current snapshot for one exact window.
++    ///
++    /// The cache lock is held only while cloning payload-owned handles. Live
++    /// provider calls must happen after this method returns so a slow UIA
++    /// provider can never block snapshot publication or retirement.
++    pub fn retain_window_elements(&self, pid: i32, window_id: u64) -> Option<Vec<S::Element>> {
++        if current_runtime_scope() != self.runtime_scope {
++            return None;
++        }
++        let inner = self.inner.lock().unwrap();
++        let entry = inner
++            .snapshots
++            .get(&pid)?
++            .iter()
++            .find(|entry| entry.window_id == window_id)?;
++        Some(
++            (0..entry.payload.len())
++                .filter_map(|index| entry.payload.retain(index))
++                .collect(),
++        )
++    }
++
+     /// Resolve the screenshot transform from the same authoritative latest
+     /// snapshot used for element tokens.
+     ///
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/expectation.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/expectation.rs
-index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8dc26a19c3 100644
+index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..81c9bca4fd609a77716b7241c71aa3c84d85af5c 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/expectation.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/expectation.rs
-@@ -50,6 +50,7 @@ pub trait ObservationProvider: Send + Sync {
+@@ -50,6 +50,8 @@ pub trait ObservationProvider: Send + Sync {
          &self,
          pid: i64,
          window_id: u64,
 +        session: Option<String>,
++        expect: &[StatePredicate],
          include_elements: bool,
          include_screenshot: bool,
      ) -> Result<ObservationSample, String>;
-@@ -79,6 +80,7 @@ impl ObservationProvider for ToolObservationProvider {
+@@ -79,6 +81,8 @@ impl ObservationProvider for ToolObservationProvider {
          &self,
          pid: i64,
          window_id: u64,
 +        session: Option<String>,
++        expect: &[StatePredicate],
          include_elements: bool,
          include_screenshot: bool,
      ) -> Result<ObservationSample, String> {
-@@ -121,7 +123,22 @@ impl ObservationProvider for ToolObservationProvider {
+@@ -121,7 +125,22 @@ impl ObservationProvider for ToolObservationProvider {
              ));
          }
  
@@ -289,16 +324,17 @@ index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8d
              return Ok(ObservationSample {
                  snapshot: ObservationSnapshot {
                      window,
-@@ -138,6 +155,8 @@ impl ObservationProvider for ToolObservationProvider {
+@@ -138,6 +157,9 @@ impl ObservationProvider for ToolObservationProvider {
              .invoke(window_state_observation_args(
                  pid,
                  window_id,
 +                session.as_deref(),
 +                window.is_none() && session.is_some(),
++                expect,
                  include_elements,
                  include_screenshot,
              ))
-@@ -158,6 +177,22 @@ impl ObservationProvider for ToolObservationProvider {
+@@ -158,6 +180,22 @@ impl ObservationProvider for ToolObservationProvider {
              .and_then(|value| value.get("elements_complete"))
              .and_then(Value::as_bool)
              == Some(true);
@@ -321,7 +357,7 @@ index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8d
          let visual_evidence = state
              .content
              .into_iter()
-@@ -166,7 +201,7 @@ impl ObservationProvider for ToolObservationProvider {
+@@ -166,7 +204,7 @@ impl ObservationProvider for ToolObservationProvider {
  
          Ok(ObservationSample {
              snapshot: ObservationSnapshot {
@@ -330,12 +366,13 @@ index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8d
                  elements,
                  element_source_trusted: trusted,
                  elements_complete: complete,
-@@ -179,13 +214,16 @@ impl ObservationProvider for ToolObservationProvider {
+@@ -179,13 +217,17 @@ impl ObservationProvider for ToolObservationProvider {
  fn window_state_observation_args(
      pid: i64,
      window_id: u64,
 +    session: Option<&str>,
 +    private_window_probe: bool,
++    expect: &[StatePredicate],
      include_elements: bool,
      include_screenshot: bool,
  ) -> Value {
@@ -349,12 +386,23 @@ index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8d
          "include_screenshot": include_screenshot,
          // Internal direct-tool flag: verification must not refresh the
          // shared action index/token cache.
-@@ -193,7 +231,11 @@ fn window_state_observation_args(
+@@ -193,7 +235,22 @@ fn window_state_observation_args(
          // public dispatch. Direct platform-tool invocation is the
          // trusted in-process channel for this non-mutating mode.
          "_observation_only": true,
 -    })
 +    });
++    if include_elements {
++        let element_predicates = expect
++            .iter()
++            .filter_map(|predicate| predicate.element.as_ref())
++            .cloned()
++            .collect::<Vec<_>>();
++        if !element_predicates.is_empty() {
++            args["_verify_element_predicates"] = serde_json::to_value(element_predicates)
++                .expect("element predicates must serialize");
++        }
++    }
 +    if let Some(session) = session {
 +        args["session"] = json!(session);
 +    }
@@ -362,7 +410,7 @@ index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8d
  }
  
  fn tool_error_text(result: &ToolResult, fallback: &str) -> String {
-@@ -289,7 +331,13 @@ impl Tool for VerifyStateTool {
+@@ -289,7 +346,14 @@ impl Tool for VerifyStateTool {
              samples += 1;
              let outcomes = match self
                  .provider
@@ -371,13 +419,14 @@ index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8d
 +                    input.pid,
 +                    input.window_id,
 +                    input.session.clone(),
++                    &input.expect,
 +                    include_elements,
 +                    false,
 +                )
                  .await
              {
                  Ok(sample) => evaluate_predicates(&input.expect, &sample.snapshot),
-@@ -341,7 +389,13 @@ impl Tool for VerifyStateTool {
+@@ -341,7 +405,14 @@ impl Tool for VerifyStateTool {
          if input.include_screenshot == Some(true) {
              if let Ok(evidence) = self
                  .provider
@@ -386,29 +435,30 @@ index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8d
 +                    input.pid,
 +                    input.window_id,
 +                    input.session.clone(),
++                    &[],
 +                    false,
 +                    true,
 +                )
                  .await
              {
                  result.content.extend(evidence.visual_evidence);
-@@ -818,14 +872,23 @@ mod tests {
+@@ -818,14 +889,23 @@ mod tests {
  
      #[test]
      fn observation_args_request_only_needed_modalities() {
 -        let screenshot_only = window_state_observation_args(42, 7, false, true);
-+        let screenshot_only = window_state_observation_args(42, 7, None, false, false, true);
++        let screenshot_only = window_state_observation_args(42, 7, None, false, &[], false, true);
          assert_eq!(screenshot_only["include_accessibility_tree"], json!(false));
          assert_eq!(screenshot_only["include_screenshot"], json!(true));
          assert_eq!(screenshot_only["_observation_only"], json!(true));
  
 -        let elements_only = window_state_observation_args(42, 7, true, false);
-+        let elements_only = window_state_observation_args(42, 7, None, false, true, false);
++        let elements_only = window_state_observation_args(42, 7, None, false, &[], true, false);
          assert_eq!(elements_only["include_accessibility_tree"], json!(true));
          assert_eq!(elements_only["include_screenshot"], json!(false));
 +
 +        let private_window_only =
-+            window_state_observation_args(42, 7, Some("private-test"), true, false, false);
++            window_state_observation_args(42, 7, Some("private-test"), true, &[], false, false);
 +        assert_eq!(
 +            private_window_only["include_accessibility_tree"],
 +            json!(true)
@@ -418,19 +468,21 @@ index 063b6287b1a3ad2fe4a57b2cff365b5caec20bac..39621a4bc1cb918f3185ed1e1920ff8d
      }
  
      #[test]
-@@ -1101,6 +1164,7 @@ mod tests {
+@@ -1101,6 +1181,8 @@ mod tests {
              &self,
              _pid: i64,
              _window_id: u64,
 +            _session: Option<String>,
++            _expect: &[StatePredicate],
              _include_elements: bool,
              include_screenshot: bool,
          ) -> Result<ObservationSample, String> {
-@@ -1288,6 +1352,7 @@ mod tests {
+@@ -1288,6 +1370,8 @@ mod tests {
              &self,
              _pid: i64,
              _window_id: u64,
 +            _session: Option<String>,
++            _expect: &[StatePredicate],
              _include_elements: bool,
              _include_screenshot: bool,
          ) -> Result<ObservationSample, String> {
@@ -1646,9 +1698,22 @@ index 4e56ef643d49bac3d06ea9fed1520cc836509dab..bea27be6036c838a6e4e9d9eaac397f4
  pub mod overlay;
  pub mod pip;
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277ce01b07c 100644
+index 453d2ee5d499540421d55de8a16ff0efdf6944a5..16251cec11b3c94c43a7fe7a0ef01f70c19597a6 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
+@@ -316,9 +316,9 @@ async fn track_overlay_drag(
+     crate::overlay::send_command(key, cursor_overlay::OverlayCommand::SetPressed(false));
+ }
+ use cua_driver_contract::{
+-    ClickButton, DragInput, GetCursorPositionInput, GetDesktopStateInput, GetScreenSizeInput,
+-    HotkeyInput, InvokeMenuInput, MoveCursorInput, PressKeyInput, ScrollDirection, ScrollInput,
+-    TypeTextInput,
++    ClickButton, DragInput, ElementPredicate, GetCursorPositionInput, GetDesktopStateInput,
++    GetScreenSizeInput, HotkeyInput, InvokeMenuInput, MoveCursorInput, PressKeyInput,
++    ScrollDirection, ScrollInput, TypeTextInput,
+ };
+ use cua_driver_core::{
+     protocol::ToolResult,
 @@ -549,6 +549,7 @@ pub struct ToolState {
      pub element_cache: Arc<ElementCache>,
      pub cursor_registry: Arc<CursorRegistry>,
@@ -1772,16 +1837,34 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          let app_name = tokio::task::spawn_blocking(move || {
              crate::win32::list_processes()
                  .into_iter()
-@@ -1305,6 +1350,8 @@ impl Tool for GetWindowStateTool {
+@@ -1286,6 +1331,10 @@ impl Tool for GetWindowStateTool {
+             .get("_observation_only")
+             .and_then(|value| value.as_bool())
+             == Some(true);
++        let verify_element_predicates = args
++            .get("_verify_element_predicates")
++            .and_then(|value| serde_json::from_value::<Vec<ElementPredicate>>(value.clone()).ok())
++            .unwrap_or_default();
+         // `include_accessibility_tree` (default true) mirrors include_screenshot:
+         // set false to SKIP the UIA walk and return just the screenshot + window
+         // metadata (the capture-only / preview path).
+@@ -1305,6 +1354,15 @@ impl Tool for GetWindowStateTool {
          let state = self.state.clone();
          let q = query.clone();
          let out_file = screenshot_out_file.clone();
 +        let private_capture = private_environment.is_some();
++        let retained_verify_eligible = observation_only
++            && private_capture
++            && query.is_none()
++            && !verify_element_predicates.is_empty()
++            && !crate::input::is_chromium_target_window(hwnd)
++            && !crate::input::has_chromium_descendant(hwnd);
++        let state_for_tree = state.clone();
 +        let tree_environment = private_environment.clone();
          // The tree walk runs under `timeout_ms`. UIA's bulk BuildUpdatedCache
          // cannot be interrupted (Chrome's provider can block indefinitely on
          // property reads), so when the walk task itself outlives the budget
-@@ -1312,22 +1359,39 @@ impl Tool for GetWindowStateTool {
+@@ -1312,22 +1370,82 @@ impl Tool for GetWindowStateTool {
          // error, and the screenshot below still comes back.
          let tree_result = if do_tree {
              let tree_task = tokio::task::spawn_blocking(move || {
@@ -1794,6 +1877,49 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
 -                } else {
 -                    crate::uia::cache::SnapshotKind::Uia
 +                let work = move || -> anyhow::Result<_> {
++                    if retained_verify_eligible {
++                        if let Some(elements) = state_for_tree
++                            .element_cache
++                            .retain_window_elements(pid as i32, hwnd)
++                        {
++                            let started = std::time::Instant::now();
++                            if let Some(nodes) =
++                                crate::uia::cache::retained_positive_existence_nodes(
++                                    &elements,
++                                    &verify_element_predicates,
++                                )
++                            {
++                                let mut tree_markdown = nodes
++                                    .iter()
++                                    .map(crate::uia::format_node_line)
++                                    .collect::<Vec<_>>()
++                                    .join("\n");
++                                if !tree_markdown.is_empty() {
++                                    tree_markdown.push('\n');
++                                }
++                                let payload = crate::uia::cache::CachedSnapshot::from_nodes(
++                                    &nodes,
++                                    crate::uia::cache::SnapshotKind::Uia,
++                                );
++                                let walk = cua_driver_core::walk_budget::WalkOutcome {
++                                    timeout_ms,
++                                    stop: None,
++                                    nodes_visited: nodes.len(),
++                                    nodes_pending: 0,
++                                    elapsed_ms: started.elapsed().as_millis() as u64,
++                                };
++                                return Ok((
++                                    crate::uia::UiaTreeResult {
++                                        tree_markdown,
++                                        nodes,
++                                    },
++                                    payload,
++                                    walk,
++                                ));
++                            }
++                        }
++                    }
++
 +                    let mut budget =
 +                        cua_driver_core::walk_budget::WalkBudget::new(timeout_ms, max_elements);
 +                    let tree = if private_capture {
@@ -1832,7 +1958,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
                  Ok(Err(e)) => return ToolResult::error(format!("UIA walk task panicked: {e}")),
                  Err(_elapsed) => {
                      let class = crate::input::delivery::read_class_name(hwnd);
-@@ -1353,43 +1417,82 @@ impl Tool for GetWindowStateTool {
+@@ -1353,43 +1471,82 @@ impl Tool for GetWindowStateTool {
          } else {
              None
          };
@@ -1948,7 +2074,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          });
          let result: anyhow::Result<_> =
              match tokio::time::timeout(UIA_SCREENSHOT_TIMEOUT, blocking).await {
-@@ -1402,19 +1505,29 @@ impl Tool for GetWindowStateTool {
+@@ -1402,19 +1559,29 @@ impl Tool for GetWindowStateTool {
                          "window capture did not finish within {}s",
                          UIA_SCREENSHOT_TIMEOUT.as_secs()
                      )),
@@ -1981,7 +2107,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  
                  if let Some((tr, payload, walk)) = tree_opt {
                      let is_msaa = tr.nodes.iter().any(|node| node.msaa_role.is_some());
-@@ -2029,9 +2142,30 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
+@@ -2029,9 +2196,30 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
  /// than left behind.
  const STANDARD_USER_SHELL_LAUNCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
  
@@ -2013,7 +2139,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  #[async_trait]
  impl Tool for LaunchAppTool {
      fn def(&self) -> &ToolDef {
-@@ -2073,6 +2207,8 @@ impl Tool for LaunchAppTool {
+@@ -2073,6 +2261,8 @@ impl Tool for LaunchAppTool {
                  parameters or as the AUMID activation arguments string). \
                  The remaining macOS-only fields currently no-op on Windows.".into(),
              input_schema: json!({"type":"object","properties":{
@@ -2022,7 +2148,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
                  "bundle_id":{"type":"string","description":"App User Model ID (AUMID) for a packaged app — pattern `{PackageFamilyName}!{ApplicationId}`, e.g. `Microsoft.WindowsNotepad_8wekyb3d8bbwe!App`. Falls back to a `name` alias if no `!` is present. Either bundle_id, name, aumid, path, or launch_path must be provided."},
                  "aumid":{"type":"string","description":"Explicit AUMID for a packaged app. Cleaner alternative to overloading `bundle_id`. Takes precedence over `bundle_id` / `name` when present."},
                  "name":{"type":"string","description":"App display name. Tried against the `shell:AppsFolder` index first for packaged-app lookup; on a miss, passed to ShellExecuteEx's PATH search."},
-@@ -2089,6 +2225,15 @@ impl Tool for LaunchAppTool {
+@@ -2089,6 +2279,15 @@ impl Tool for LaunchAppTool {
      }
  
      async fn invoke(&self, args: Value) -> ToolResult {
@@ -2038,7 +2164,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          let launch_path_opt = args
              .get("launch_path")
              .and_then(|v| v.as_str())
-@@ -2116,6 +2261,222 @@ impl Tool for LaunchAppTool {
+@@ -2116,6 +2315,222 @@ impl Tool for LaunchAppTool {
              .get("start_minimized")
              .and_then(|v| v.as_bool())
              .unwrap_or(false);
@@ -2261,7 +2387,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          // `nShow` for the ShellExecuteEx-based launches. SW_SHOWNOACTIVATE
          // keeps the new window from grabbing focus but still renders it on
          // top of the previous frontmost window. SW_SHOWMINNOACTIVE both
-@@ -3115,92 +3476,1202 @@ fn background_element_click_result(
+@@ -3115,80 +3530,1178 @@ fn background_element_click_result(
          .with_action_record(record)
  }
  
@@ -2399,12 +2525,6 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
 -                    "modifier": cua_driver_core::tool_schema::modifier_schema(),
 -                    "from_zoom":{"type":"boolean","description":"When true, x and y are pixel coordinates in the last `zoom` image for this pid. The driver maps them back to window coords."},
 -                    "scope":{"type":"string","enum":["window","desktop"],"default":"window"},
--                    "delivery_mode": crate::input::delivery::delivery_mode_schema()
--                },"additionalProperties":false
--            }),
--            read_only: false, destructive: true, idempotent: false, open_world: true,
--        })
--    }
 +    let post = tokio::task::spawn_blocking(move || {
 +        crate::execution_environment::private_visual_worker_client::finish(session)
 +    })
@@ -3514,15 +3634,10 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
 +                    "from_zoom":{"type":"boolean","description":"When true, x and y are pixel coordinates in the last `zoom` image for this pid. The driver maps them back to window coords."},
 +                    "scope":{"type":"string","enum":["window","desktop"],"default":"window"},
 +                    "verify_visual":{"type":"boolean","description":"Private-desktop only. Default false. When true, require a settled PrintWindow A/B baseline and a trusted post-action C frame with a non-zero pixel delta. Visual evidence supplements semantic verification and never replaces it."},
-+                    "delivery_mode": crate::input::delivery::delivery_mode_schema()
-+                },"additionalProperties":false
-+            }),
-+            read_only: false, destructive: true, idempotent: false, open_world: true,
-+        })
-+    }
- 
-     async fn invoke(&self, args: Value) -> ToolResult {
-         use crate::input::delivery::{DeliveryMode, EventKind};
+                     "delivery_mode": crate::input::delivery::delivery_mode_schema()
+                 },"additionalProperties":false
+             }),
+@@ -3201,6 +4714,18 @@ impl Tool for ClickTool {
          use crate::uia::cache::SnapshotKind;
          use cua_driver_core::tool_args::ArgsExt;
          let cursor_key = resolve_cursor_key(&args);
@@ -3541,7 +3656,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  
          // ── Window-less screen-absolute branch (desktop target) ───────────────
          // When the caller gives x,y with NO pid/window_id, treat x,y as TRUE
-@@ -3211,6 +4682,16 @@ impl Tool for ClickTool {
+@@ -3211,6 +4736,16 @@ impl Tool for ClickTool {
          let has_xy = args.get("x").map(|v| v.is_number()).unwrap_or(false)
              && args.get("y").map(|v| v.is_number()).unwrap_or(false);
          if !has_pid && !has_window_id && has_xy {
@@ -3558,7 +3673,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
              if !is_windowless_desktop_action(&args) {
                  return ToolResult::error(
                      "click: x,y given with no pid/window_id requires scope=\"desktop\"; \
-@@ -3380,6 +4861,18 @@ impl Tool for ClickTool {
+@@ -3380,6 +4915,18 @@ impl Tool for ClickTool {
                  }
              }));
          }
@@ -3577,7 +3692,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          // Optional `action` arg picks among the actions exposed in the
          // accessibility tree. Today this only changes behavior for MSAA
          // BUTTONDROPDOWN: `"expand"` clicks the right-edge (dropdown arrow
-@@ -3394,6 +4887,16 @@ impl Tool for ClickTool {
+@@ -3394,6 +4941,16 @@ impl Tool for ClickTool {
          // Resolve HWND: explicit, or auto from pid.
          let hwnd = match hwnd_opt {
              Some(h) => h,
@@ -3594,7 +3709,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
              None => {
                  let windows = tokio::task::spawn_blocking({
                      let admitted = admitted.clone();
-@@ -3456,6 +4959,70 @@ impl Tool for ClickTool {
+@@ -3456,6 +5013,70 @@ impl Tool for ClickTool {
              _ => None,
          };
  
@@ -3665,7 +3780,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          if let Some(idx) = elem_idx {
              // ── MSAA dispatch (SAL/VCL targets) ────────────────────────────
              // For MSAA elements, route by role:
-@@ -4327,6 +5894,194 @@ async fn focus_by_pixel(
+@@ -4327,6 +5948,194 @@ async fn focus_by_pixel(
      Ok(())
  }
  
@@ -3860,7 +3975,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  pub struct TypeTextTool {
      state: Arc<ToolState>,
  }
-@@ -4452,6 +6207,29 @@ impl Tool for TypeTextTool {
+@@ -4452,6 +6261,29 @@ impl Tool for TypeTextTool {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
          let cursor_key = resolve_cursor_key(&args);
@@ -3890,7 +4005,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          if args.get("scope").and_then(Value::as_str) == Some("desktop")
              && args.get("pid").is_none()
              && args.get("window_id").is_none()
-@@ -4514,6 +6292,54 @@ impl Tool for TypeTextTool {
+@@ -4514,6 +6346,54 @@ impl Tool for TypeTextTool {
          };
          let (elem_idx, hwnd_opt, admitted) = resolved.into_parts(args.opt_u64("window_id"));
          let delivery = DeliveryMode::from_args(&args);
@@ -3945,7 +4060,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  
          // ── px form: focus by pixel-click, then type into the focused element ──
          // Pass x,y (no element_index) for an *element px action*: pixel-click the
-@@ -5161,6 +6987,29 @@ impl Tool for PressKeyTool {
+@@ -5161,6 +7041,29 @@ impl Tool for PressKeyTool {
      async fn invoke(&self, args: Value) -> ToolResult {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
@@ -3975,7 +4090,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          if args.get("scope").and_then(Value::as_str) == Some("desktop")
              && args.get("pid").is_none()
              && args.get("window_id").is_none()
-@@ -5217,6 +7066,323 @@ impl Tool for PressKeyTool {
+@@ -5217,6 +7120,323 @@ impl Tool for PressKeyTool {
          };
          let (elem_idx, hwnd_opt, admitted) = resolved.into_parts(args.opt_u64("window_id"));
          let delivery = DeliveryMode::from_args(&args);
@@ -4299,7 +4414,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          // Swift requires window_id when element_index is supplied — ports the
          // same validation.
          if elem_idx.is_some() && hwnd_opt.is_none() {
-@@ -5521,6 +7687,29 @@ impl Tool for HotkeyTool {
+@@ -5521,6 +7741,29 @@ impl Tool for HotkeyTool {
      async fn invoke(&self, args: Value) -> ToolResult {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
@@ -4329,7 +4444,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          if args.get("scope").and_then(Value::as_str) == Some("desktop")
              && args.get("pid").is_none()
              && args.get("window_id").is_none()
-@@ -5600,38 +7789,289 @@ impl Tool for HotkeyTool {
+@@ -5600,38 +7843,289 @@ impl Tool for HotkeyTool {
                          .filter_map(|v| v.as_str().map(str::to_owned))
                          .collect()
                  })
@@ -4650,7 +4765,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  
          // Resolve HWND: use window_id if given, else pick first window for pid.
          let hwnd = match hwnd_opt {
-@@ -5842,6 +8282,260 @@ impl Tool for HotkeyTool {
+@@ -5842,6 +8336,260 @@ impl Tool for HotkeyTool {
  
  // ── set_value ─────────────────────────────────────────────────────────────────
  
@@ -4911,7 +5026,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  pub struct SetValueTool {
      state: Arc<ToolState>,
  }
-@@ -5850,6 +8544,10 @@ static SET_VALUE_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
+@@ -5850,6 +8598,10 @@ static SET_VALUE_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
  
  #[async_trait]
  impl Tool for SetValueTool {
@@ -4922,7 +5037,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
      fn def(&self) -> &ToolDef {
          SET_VALUE_DEF.get_or_init(|| ToolDef {
              name: "set_value".into(),
-@@ -5875,7 +8573,8 @@ impl Tool for SetValueTool {
+@@ -5875,7 +8627,8 @@ impl Tool for SetValueTool {
                      "element_index": cua_driver_core::tool_schema::element_index_schema(),
                      "element_token": cua_driver_core::tool_schema::element_token_schema(),
                      "snapshot_id": cua_driver_core::tool_schema::snapshot_id_schema(),
@@ -4932,7 +5047,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
                  },"additionalProperties":false
              }),
              // Swift: idempotent: true (setting same value twice is idempotent).
-@@ -5897,6 +8596,10 @@ impl Tool for SetValueTool {
+@@ -5897,6 +8650,10 @@ impl Tool for SetValueTool {
              Some(v) => v.to_owned(),
              None => return ToolResult::error("Missing required string field value."),
          };
@@ -4943,7 +5058,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          // Surface 6: element_token / element_index precedence resolution.
          let resolved = match self.state.element_cache.resolve_element_args(
              pid as i32,
-@@ -5918,14 +8621,77 @@ impl Tool for SetValueTool {
+@@ -5918,14 +8675,77 @@ impl Tool for SetValueTool {
                  "set_value requires a UIA element; MSAA value writes are unsupported.",
              );
          }
@@ -5023,7 +5138,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          {
              Some(crate::input::NoActivateGuard::arm(
                  windows::Win32::Foundation::HWND(hwnd as *mut _),
-@@ -5938,7 +8704,7 @@ impl Tool for SetValueTool {
+@@ -5938,7 +8758,7 @@ impl Tool for SetValueTool {
          // value, so a value write gets the same visual feedback as a click —
          // the viewer can see *where* the agent is acting. No-op when the
          // overlay is disabled or the element has no cached center.
@@ -5032,7 +5147,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
              let (cx, cy) = admitted.center;
              pin_overlay_above(&cursor_key, hwnd);
              overlay_glide_to(&cursor_key, cx as f64, cy as f64).await;
-@@ -5951,73 +8717,224 @@ impl Tool for SetValueTool {
+@@ -5951,73 +8771,224 @@ impl Tool for SetValueTool {
              );
          }
  
@@ -5313,7 +5428,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          }
      }
  }
-@@ -6071,6 +8988,14 @@ impl Tool for ScrollTool {
+@@ -6071,6 +9042,14 @@ impl Tool for ScrollTool {
      async fn invoke(&self, args: Value) -> ToolResult {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
@@ -5328,7 +5443,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          // ── Window-less screen-absolute branch (desktop target) ───────────────
          // No pid/window_id + numeric x,y + desktop scope → synthesize a wheel
          // event at the screen point via SendInput. The wheel routes to whatever
-@@ -6080,6 +9005,17 @@ impl Tool for ScrollTool {
+@@ -6080,6 +9059,17 @@ impl Tool for ScrollTool {
          let has_window_id = args.get("window_id").map(|v| !v.is_null()).unwrap_or(false);
          let has_xy = args.get("x").map(|v| v.is_number()).unwrap_or(false)
              && args.get("y").map(|v| v.is_number()).unwrap_or(false);
@@ -5346,7 +5461,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          if !has_pid && !has_window_id && has_xy {
              if !is_windowless_desktop_action(&args) {
                  return ToolResult::error(
-@@ -6159,6 +9095,253 @@ impl Tool for ScrollTool {
+@@ -6159,6 +9149,253 @@ impl Tool for ScrollTool {
              );
          }
  
@@ -5600,7 +5715,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          // Resolve HWND: use window_id if given, else first window for pid.
          let hwnd = match hwnd_opt {
              Some(h) => h,
-@@ -6658,6 +9841,14 @@ impl Tool for DoubleClickTool {
+@@ -6658,6 +9895,14 @@ impl Tool for DoubleClickTool {
              None => return ToolResult::error("Missing required integer field pid."),
          };
          let pid = raw_pid as u32;
@@ -5615,7 +5730,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          use cua_driver_core::tool_args::ArgsExt;
          // Surface 6: element_token / element_index precedence resolution.
          let resolved = match self.state.element_cache.resolve_element_args(
-@@ -6698,6 +9889,84 @@ impl Tool for DoubleClickTool {
+@@ -6698,6 +9943,84 @@ impl Tool for DoubleClickTool {
              );
          }
  
@@ -5700,7 +5815,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          // Resolve HWND: explicit, or auto from pid.
          let hwnd = match hwnd_opt {
              Some(h) => h,
-@@ -7033,6 +10302,14 @@ impl Tool for RightClickTool {
+@@ -7033,6 +10356,14 @@ impl Tool for RightClickTool {
              None => return ToolResult::error("Missing required integer field pid."),
          };
          let pid = raw_pid as u32;
@@ -5715,7 +5830,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          use cua_driver_core::tool_args::ArgsExt;
          // Surface 6: element_token / element_index precedence resolution.
          let resolved = match self.state.element_cache.resolve_element_args(
-@@ -7073,6 +10350,84 @@ impl Tool for RightClickTool {
+@@ -7073,6 +10404,84 @@ impl Tool for RightClickTool {
              );
          }
  
@@ -5800,7 +5915,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          // Resolve HWND: explicit, or auto from pid.
          let hwnd = match hwnd_opt {
              Some(h) => h,
-@@ -7387,6 +10742,29 @@ impl Tool for DragTool {
+@@ -7387,6 +10796,29 @@ impl Tool for DragTool {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
          let cursor_key = resolve_cursor_key(&args);
@@ -5830,7 +5945,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          if args.get("scope").and_then(Value::as_str) == Some("desktop")
              && args.get("pid").is_none()
              && args.get("window_id").is_none()
-@@ -7482,17 +10860,191 @@ impl Tool for DragTool {
+@@ -7482,17 +10914,191 @@ impl Tool for DragTool {
                      to_x = wx2;
                      to_y = wy2;
                  }
@@ -6032,7 +6147,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          }
  
          let hwnd = match hwnd_opt {
-@@ -7995,11 +11547,11 @@ impl Tool for MoveCursorTool {
+@@ -7995,11 +11601,11 @@ impl Tool for MoveCursorTool {
          MCURSOR_DEF.get_or_init(|| ToolDef {
              name: "move_cursor".into(),
              description:
@@ -6046,7 +6161,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
                  "x":{"type":"number"},"y":{"type":"number"},"cursor_id":{"type":"string"}
              },"additionalProperties":false}),
              read_only: false,
-@@ -8008,9 +11560,179 @@ impl Tool for MoveCursorTool {
+@@ -8008,9 +11614,179 @@ impl Tool for MoveCursorTool {
              open_world: false,
          })
      }
@@ -6227,7 +6342,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
              let input = match parse_typed_projection::<MoveCursorInput>("move_cursor", &args) {
                  Ok(input) => input,
                  Err(error) => return error,
-@@ -8027,21 +11749,15 @@ impl Tool for MoveCursorTool {
+@@ -8027,21 +11803,15 @@ impl Tool for MoveCursorTool {
                  Err(error) => ToolResult::error(error.to_string()),
              };
          }
@@ -6252,7 +6367,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          crate::overlay::animate_cursor_to(cursor_key.clone(), x, y).await;
          let shown = if cursor_key.is_empty() {
              "default"
-@@ -8800,6 +12516,7 @@ impl Tool for ZoomTool {
+@@ -8800,6 +12570,7 @@ impl Tool for ZoomTool {
                  current snapshot owned by this session and window.".into(),
              input_schema: json!({
                  "type":"object","required":["window_id","x1","y1","x2","y2"],"properties":{
@@ -6260,7 +6375,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
                      "pid":{"type":"integer","description":"Optional target process ID. When omitted, the unique current snapshot for this session and HWND is used."},
                      "window_id":{"type":"integer","description":"HWND of the target window."},
                      "x1":{"type":"number","description":"Left edge of the region (resized-image pixels)."},
-@@ -8825,6 +12542,14 @@ impl Tool for ZoomTool {
+@@ -8825,6 +12596,14 @@ impl Tool for ZoomTool {
              Some(v) => v,
              None => return ToolResult::error("Missing required integer field window_id."),
          };
@@ -6275,7 +6390,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          use cua_driver_core::tool_args::ArgsExt;
          let coerce = |k: &str| {
              args.opt_f64(k)
-@@ -8858,6 +12583,21 @@ impl Tool for ZoomTool {
+@@ -8858,6 +12637,21 @@ impl Tool for ZoomTool {
              Ok(context) => context,
              Err(refusal) => return refusal,
          };
@@ -6297,7 +6412,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          let (nx1, ny1, nx2, ny2) = (
              x1 * screenshot.scale,
              y1 * screenshot.scale,
-@@ -8866,11 +12606,22 @@ impl Tool for ZoomTool {
+@@ -8866,11 +12660,22 @@ impl Tool for ZoomTool {
          );
  
          let state = self.state.clone();
@@ -6325,7 +6440,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  
          match result {
              Ok(Ok(crop)) => {
-@@ -8903,10 +12654,24 @@ impl Tool for ZoomTool {
+@@ -8903,10 +12708,24 @@ impl Tool for ZoomTool {
                      is_error: None,
                      // Surface 7: `mime_type` mirrors the MCP image part's `mimeType`
                      // onto the structured payload (additive — `format` stays).
@@ -6354,7 +6469,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
                      action_record: None,
                  }
              }
-@@ -9008,7 +12773,9 @@ impl Tool for TypeTextCharsTool {
+@@ -9008,7 +12827,9 @@ impl Tool for TypeTextCharsTool {
  
  // ── invoke_menu ───────────────────────────────────────────────────────────
  
@@ -6365,7 +6480,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  static INVOKE_MENU_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
  
  fn normalized_menu_path(path: Vec<String>) -> Result<Vec<String>, String> {
-@@ -9082,18 +12849,74 @@ impl Tool for InvokeMenuTool {
+@@ -9082,18 +12903,74 @@ impl Tool for InvokeMenuTool {
              Ok(input) => input,
              Err(result) => return result,
          };
@@ -6442,7 +6557,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
              return menu_refusal("invoke_menu: window_id does not belong to pid".into());
          }
  
-@@ -9187,7 +13010,9 @@ fn outer_frame_for_visible_request(
+@@ -9187,7 +13064,9 @@ fn outer_frame_for_visible_request(
      ))
  }
  
@@ -6453,7 +6568,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  
  static SET_WINDOW_FRAME_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
  
-@@ -9221,7 +13046,32 @@ impl Tool for SetWindowFrameTool {
+@@ -9221,7 +13100,32 @@ impl Tool for SetWindowFrameTool {
                  Ok(input) => input,
                  Err(result) => return result,
              };
@@ -6487,7 +6602,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
              use windows::Win32::{
                  Foundation::{HWND, RECT},
                  Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS},
-@@ -9244,7 +13094,9 @@ impl Tool for SetWindowFrameTool {
+@@ -9244,7 +13148,9 @@ impl Tool for SetWindowFrameTool {
              let to_i32 = |name: &str, value: f64| -> Result<i32, String> {
                  let rounded = value.round();
                  if rounded < i32::MIN as f64 || rounded > i32::MAX as f64 {
@@ -6498,7 +6613,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
                  } else {
                      Ok(rounded as i32)
                  }
-@@ -9258,7 +13110,10 @@ impl Tool for SetWindowFrameTool {
+@@ -9258,7 +13164,10 @@ impl Tool for SetWindowFrameTool {
              }
              let hwnd = HWND(input.window_id as usize as *mut std::ffi::c_void);
              if !unsafe { IsWindow(hwnd).as_bool() } {
@@ -6510,7 +6625,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
              }
              let mut owner_pid = 0_u32;
              unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner_pid)) };
-@@ -9280,45 +13135,43 @@ impl Tool for SetWindowFrameTool {
+@@ -9280,45 +13189,43 @@ impl Tool for SetWindowFrameTool {
                      input.window_id
                  ));
              }
@@ -6591,7 +6706,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
              let mutation_error = unsafe {
                  SetWindowPos(
                      hwnd,
-@@ -9351,47 +13204,57 @@ impl Tool for SetWindowFrameTool {
+@@ -9351,47 +13258,57 @@ impl Tool for SetWindowFrameTool {
                  changed,
                  mutation_error,
              ))
@@ -6685,7 +6800,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
      }
  }
  
-@@ -10061,12 +13924,14 @@ pub fn build_registry_with_provider(
+@@ -10061,12 +13978,14 @@ pub fn build_registry_with_provider(
      let cursor_registry = state.cursor_registry.clone();
      let element_cache = state.element_cache.clone();
      let zoom_registry = state.zoom_registry.clone();
@@ -6700,7 +6815,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
          });
      let session_revive_hook =
          cua_driver_core::session::register_scoped_session_revive_hook(move |session_id| {
-@@ -10105,12 +13970,18 @@ pub fn build_registry_with_provider(
+@@ -10105,12 +14024,18 @@ pub fn build_registry_with_provider(
              ),
          )),
      ));
@@ -6722,7 +6837,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
      r.register(Box::new(DebugWindowInfoTool));
      r.register(pid_window_guarded(
          ClickTool {
-@@ -10193,9 +14064,12 @@ pub fn build_registry_with_provider(
+@@ -10193,9 +14118,12 @@ pub fn build_registry_with_provider(
          state: state.clone(),
      }));
      r.register(Box::new(GetCursorPositionTool));
@@ -6738,7 +6853,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
      r.register(Box::new(SetAgentCursorEnabledV2Tool {
          state: state.clone(),
      }));
-@@ -10253,7 +14127,170 @@ pub fn build_registry_with_provider(
+@@ -10253,7 +14181,170 @@ pub fn build_registry_with_provider(
  mod cursor_key_resolution_tests;
  
  #[cfg(test)]
@@ -6910,6 +7025,223 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..7e28c242730ed2bbb286c52c17a05277
  
  #[cfg(test)]
  mod chromium_flag_injection_tests;
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs b/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
+index 19139b20932b6634978ca9e27cc29a21cc049411..0e3fad94250909ee4bd5d058dcc79fb4f636048d 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
+@@ -1,7 +1,11 @@
+ use super::UiaNode;
++use cua_driver_contract::ElementPredicate;
+ use cua_driver_core::element_cache::{ElementCacheCore, SnapshotPayload};
++use std::collections::BTreeMap;
+ use windows::core::Interface;
+-use windows::Win32::UI::Accessibility::{IAccessible, IUIAutomationElement};
++use windows::Win32::UI::Accessibility::{
++    IAccessible, IUIAutomationElement, UIA_ValueValuePropertyId,
++};
+ 
+ pub type ElementCache = ElementCacheCore<CachedSnapshot>;
+ 
+@@ -12,6 +16,10 @@ pub struct RetainedElement {
+     pub center: (i32, i32),
+     pub rect: Option<(i32, i32, i32, i32)>,
+     pub msaa_role: Option<i32>,
++    element_index: usize,
++    verification_role: String,
++    verification_label: Option<String>,
++    trusted_for_verification: bool,
+ }
+ 
+ impl RetainedElement {
+@@ -44,6 +52,87 @@ impl RetainedElement {
+         std::mem::forget(element);
+         focused
+     }
++
++    fn cached_selector_might_match(&self, predicate: &ElementPredicate) -> bool {
++        if !self.is_uia() || !self.trusted_for_verification {
++            return false;
++        }
++        if let Some(role) = predicate.selector.role.as_deref() {
++            if normalized_role(&self.verification_role) != normalized_role(role) {
++                return false;
++            }
++        }
++        if let Some(label) = predicate.selector.label_contains.as_deref() {
++            let needle = label.to_lowercase();
++            if !self
++                .verification_label
++                .as_deref()
++                .is_some_and(|actual| actual.to_lowercase().contains(&needle))
++            {
++                return false;
++            }
++        }
++        true
++    }
++
++    fn live_positive_node(&self, predicate: &ElementPredicate) -> Option<UiaNode> {
++        if !self.cached_selector_might_match(predicate) {
++            return None;
++        }
++        let element = unsafe { IUIAutomationElement::from_raw(self.ptr as *mut _) };
++        let control_type = unsafe { element.CurrentControlType() }
++            .ok()
++            .map(|value| super::control_type_name(value.0));
++        let name = super::current_nonempty_bstr(unsafe { element.CurrentName() });
++        let value = super::read_current_bstr_property(&element, UIA_ValueValuePropertyId);
++        let automation_id = super::current_nonempty_bstr(unsafe { element.CurrentAutomationId() });
++        let help_text = super::current_nonempty_bstr(unsafe { element.CurrentHelpText() });
++        std::mem::forget(element);
++
++        let control_type = control_type?;
++        if untrusted_role(&control_type) {
++            return None;
++        }
++        if let Some(role) = predicate.selector.role.as_deref() {
++            if normalized_role(&control_type) != normalized_role(role) {
++                return None;
++            }
++        }
++        let label = name
++            .clone()
++            .or_else(|| value.clone())
++            .or_else(|| automation_id.clone())
++            .or_else(|| help_text.clone());
++        if let Some(expected) = predicate.selector.label_contains.as_deref() {
++            let needle = expected.to_lowercase();
++            if !label
++                .as_deref()
++                .is_some_and(|actual| actual.to_lowercase().contains(&needle))
++            {
++                return None;
++            }
++        }
++
++        Some(UiaNode {
++            element_index: Some(self.element_index),
++            control_type,
++            name,
++            value,
++            automation_id,
++            help_text,
++            actions: Vec::new(),
++            enabled: None,
++            selected: None,
++            element_ptr: 0,
++            center_x: 0,
++            center_y: 0,
++            rect: None,
++            msaa_role: None,
++            depth: 0,
++            parent_element_index: None,
++            in_web_content: false,
++        })
++    }
+ }
+ 
+ impl Clone for RetainedElement {
+@@ -72,6 +161,10 @@ impl Clone for RetainedElement {
+             center: self.center,
+             rect: self.rect,
+             msaa_role: self.msaa_role,
++            element_index: self.element_index,
++            verification_role: self.verification_role.clone(),
++            verification_label: self.verification_label.clone(),
++            trusted_for_verification: self.trusted_for_verification,
+         }
+     }
+ }
+@@ -104,19 +197,82 @@ impl CachedSnapshot {
+         Self {
+             elements: nodes
+                 .iter()
+-                .filter(|node| node.element_index.is_some())
+-                .map(|node| RetainedElement {
+-                    ptr: node.element_ptr,
+-                    kind,
+-                    center: (node.center_x, node.center_y),
+-                    rect: node.rect,
+-                    msaa_role: node.msaa_role,
++                .filter_map(|node| {
++                    let element_index = node.element_index?;
++                    let verification_label = node
++                        .name
++                        .clone()
++                        .or_else(|| node.value.clone())
++                        .or_else(|| node.automation_id.clone())
++                        .or_else(|| node.help_text.clone());
++                    Some(RetainedElement {
++                        ptr: node.element_ptr,
++                        kind,
++                        center: (node.center_x, node.center_y),
++                        rect: node.rect,
++                        msaa_role: node.msaa_role,
++                        element_index,
++                        verification_role: node.control_type.clone(),
++                        verification_label,
++                        trusted_for_verification: !node.in_web_content
++                            && !untrusted_role(&node.control_type),
++                    })
+                 })
+                 .collect(),
+         }
+     }
+ }
+ 
++fn normalized_role(role: &str) -> String {
++    let normalized: String = role
++        .chars()
++        .filter(|character| character.is_ascii_alphanumeric())
++        .flat_map(char::to_lowercase)
++        .collect();
++    let normalized = normalized
++        .strip_prefix("ax")
++        .unwrap_or(&normalized)
++        .to_owned();
++    match normalized.as_str() {
++        "pushbutton" => "button".to_owned(),
++        "pagetab" | "tabitem" => "tab".to_owned(),
++        _ => normalized,
++    }
++}
++
++fn untrusted_role(role: &str) -> bool {
++    let normalized = role.to_ascii_lowercase().replace(['_', ' '], "");
++    normalized.contains("webarea") || normalized.contains("document") || normalized == "embedded"
++}
++
++pub fn retained_positive_existence_nodes(
++    elements: &[RetainedElement],
++    predicates: &[ElementPredicate],
++) -> Option<Vec<UiaNode>> {
++    if predicates.is_empty()
++        || predicates.iter().any(|predicate| {
++            predicate.exists == Some(false)
++                || predicate.value_equals.is_some()
++                || predicate.enabled.is_some()
++                || predicate.selected.is_some()
++                || (predicate.selector.role.is_none()
++                    && predicate.selector.label_contains.is_none())
++        })
++    {
++        return None;
++    }
++
++    let mut matched = BTreeMap::new();
++    for predicate in predicates {
++        let node = elements
++            .iter()
++            .filter(|element| element.cached_selector_might_match(predicate))
++            .find_map(|element| element.live_positive_node(predicate))?;
++        matched.entry(node.element_index?).or_insert(node);
++    }
++    Some(matched.into_values().collect())
++}
++
+ impl SnapshotPayload for CachedSnapshot {
+     type Element = RetainedElement;
+ 
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs b/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs
 index 6a15ce99b4341a2d0aec940e5a884e52d6965c86..58faa83c3eb3d8533d2771560d95bdb13f3a11a3 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs
