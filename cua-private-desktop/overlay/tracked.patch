@@ -5183,7 +5183,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
 +            );
 +        };
 +        let result = if let Some(environment) = private_environment.clone() {
-+            tokio::task::spawn_blocking(move || environment.run_attached_blocking(work)).await
++            Ok(environment.run_attached_blocking_async(work).await)
 +        } else {
 +            tokio::task::spawn_blocking(work).await
 +        };
@@ -6303,7 +6303,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
 +            )?)
 +        };
 +        let result = if let Some(environment) = private_environment {
-+            tokio::task::spawn_blocking(move || environment.run_attached_blocking(work)).await
++            Ok(environment.run_attached_blocking_async(work).await)
 +        } else {
 +            tokio::task::spawn_blocking(work).await
 +        };
@@ -6576,7 +6576,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
              let mutation_error = unsafe {
                  SetWindowPos(
                      hwnd,
-@@ -9351,47 +13227,58 @@ impl Tool for SetWindowFrameTool {
+@@ -9351,47 +13227,57 @@ impl Tool for SetWindowFrameTool {
                  changed,
                  mutation_error,
              ))
@@ -6584,10 +6584,9 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
 -        .await;
 +        };
 +        let outcome = if let Some(environment) = private_environment {
-+            tokio::task::spawn_blocking(move || {
-+                environment.run_attached_blocking(move || work().map_err(anyhow::Error::msg))
-+            })
-+            .await
++            Ok(environment
++                .run_attached_blocking_async(move || work().map_err(anyhow::Error::msg))
++                .await)
 +        } else {
 +            tokio::task::spawn_blocking(move || work().map_err(anyhow::Error::msg)).await
 +        };
@@ -6671,7 +6670,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
      }
  }
  
-@@ -10061,12 +13948,14 @@ pub fn build_registry_with_provider(
+@@ -10061,12 +13947,14 @@ pub fn build_registry_with_provider(
      let cursor_registry = state.cursor_registry.clone();
      let element_cache = state.element_cache.clone();
      let zoom_registry = state.zoom_registry.clone();
@@ -6686,7 +6685,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
          });
      let session_revive_hook =
          cua_driver_core::session::register_scoped_session_revive_hook(move |session_id| {
-@@ -10105,12 +13994,18 @@ pub fn build_registry_with_provider(
+@@ -10105,12 +13993,18 @@ pub fn build_registry_with_provider(
              ),
          )),
      ));
@@ -6708,7 +6707,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
      r.register(Box::new(DebugWindowInfoTool));
      r.register(pid_window_guarded(
          ClickTool {
-@@ -10193,9 +14088,12 @@ pub fn build_registry_with_provider(
+@@ -10193,9 +14087,12 @@ pub fn build_registry_with_provider(
          state: state.clone(),
      }));
      r.register(Box::new(GetCursorPositionTool));
@@ -6724,7 +6723,7 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..f85810a0076ea9eb59af5c283bf5a23c
      r.register(Box::new(SetAgentCursorEnabledV2Tool {
          state: state.clone(),
      }));
-@@ -10253,7 +14151,170 @@ pub fn build_registry_with_provider(
+@@ -10253,7 +14150,170 @@ pub fn build_registry_with_provider(
  mod cursor_key_resolution_tests;
  
  #[cfg(test)]

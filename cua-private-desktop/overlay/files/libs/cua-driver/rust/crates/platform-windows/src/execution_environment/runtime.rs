@@ -286,6 +286,36 @@ impl PrivateDesktopRuntime {
             .map_err(|error| anyhow::anyhow!("private blocking actor reply timed out: {error}"))?
     }
 
+    pub async fn run_attached_blocking_async<T, F>(&self, task: F) -> anyhow::Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let actor_task = Box::new(move |runtime: &tokio::runtime::Runtime| {
+            let result = runtime.block_on(async {
+                tokio::task::spawn_blocking(task)
+                    .await
+                    .map_err(|error| anyhow::anyhow!("private blocking task panicked: {error}"))?
+            });
+            let _ = reply_tx.send(result);
+        });
+        self.sender
+            .send(ActorCommand::RunAttachedBlocking { task: actor_task })
+            .map_err(|_| anyhow::anyhow!("private desktop actor stopped"))?;
+
+        match tokio::time::timeout(ACTOR_REPLY_TIMEOUT, reply_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(anyhow::anyhow!(
+                "private desktop actor stopped before replying to async blocking task"
+            )),
+            Err(_) => Err(anyhow::anyhow!(
+                "private async blocking actor reply timed out after {:?}",
+                ACTOR_REPLY_TIMEOUT
+            )),
+        }
+    }
+
     pub fn shutdown(&self) -> Result<(), String> {
         let join = self.join.lock().unwrap().take();
         let Some(join) = join else {
