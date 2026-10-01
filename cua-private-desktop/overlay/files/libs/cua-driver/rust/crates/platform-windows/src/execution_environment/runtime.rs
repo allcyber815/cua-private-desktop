@@ -5,6 +5,7 @@
 //! Tokio runtime. Tokio blocking workers are attached to the same desktop at
 //! thread start. Commands are serialized so private GUI mutations cannot race.
 
+use super::private_observation::{PrivateObservationEpoch, PrivateObservationMonitor};
 use super::win32_private::{
     attach_current_thread_to, current_thread_desktop_name, PrivateChild, PrivateDesktopCore,
     PrivateJobProbe, PrivateWindowInfo,
@@ -59,6 +60,7 @@ pub struct PrivateTargetProfile {
 
 struct StartupReceipt {
     desktop_name: String,
+    desktop_handle_addr: usize,
     actor_desktop_name: String,
     blocking_desktop_name: String,
 }
@@ -95,7 +97,9 @@ pub struct PrivateDesktopRuntime {
     sender: mpsc::Sender<ActorCommand>,
     join: Mutex<Option<JoinHandle<()>>>,
     target_profiles: Mutex<HashMap<(u32, u64), PrivateTargetProfile>>,
+    observation_monitor: Mutex<Option<PrivateObservationMonitor>>,
     desktop_name: String,
+    desktop_handle_addr: usize,
     actor_desktop_name: String,
     blocking_desktop_name: String,
 }
@@ -128,7 +132,9 @@ impl PrivateDesktopRuntime {
             sender,
             join: Mutex::new(Some(join)),
             target_profiles: Mutex::new(HashMap::new()),
+            observation_monitor: Mutex::new(None),
             desktop_name: startup.desktop_name,
+            desktop_handle_addr: startup.desktop_handle_addr,
             actor_desktop_name: startup.actor_desktop_name,
             blocking_desktop_name: startup.blocking_desktop_name,
         }))
@@ -167,6 +173,27 @@ impl PrivateDesktopRuntime {
         }
     }
 
+    pub fn wpf_observation_epoch(
+        &self,
+        pid: u32,
+        hwnd: u64,
+    ) -> Result<PrivateObservationEpoch, String> {
+        let mut monitor = self
+            .observation_monitor
+            .lock()
+            .map_err(|_| "private observation monitor lock poisoned".to_owned())?;
+        if monitor.is_none() {
+            *monitor = Some(PrivateObservationMonitor::start(
+                self.desktop_handle_addr,
+                self.desktop_name.clone(),
+            )?);
+        }
+        monitor
+            .as_ref()
+            .expect("private observation monitor initialized")
+            .watch_wpf(pid, hwnd)
+    }
+
     pub fn launch_direct(
         &self,
         program: &Path,
@@ -178,6 +205,15 @@ impl PrivateDesktopRuntime {
         // later action can never inherit classification from a prior launch.
         if let Ok(mut profiles) = self.target_profiles.lock() {
             profiles.clear();
+        }
+        if let Ok(mut monitor) = self.observation_monitor.lock() {
+            if let Some(observer) = monitor.as_ref() {
+                if observer.reset().is_err() {
+                    if let Some(observer) = monitor.take() {
+                        let _ = observer.shutdown();
+                    }
+                }
+            }
         }
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         self.sender
@@ -317,6 +353,12 @@ impl PrivateDesktopRuntime {
     }
 
     pub fn shutdown(&self) -> Result<(), String> {
+        if let Ok(mut monitor) = self.observation_monitor.lock() {
+            if let Some(observer) = monitor.take() {
+                let _ = observer.shutdown();
+            }
+        }
+
         let join = self.join.lock().unwrap().take();
         let Some(join) = join else {
             return Ok(());
@@ -527,6 +569,7 @@ fn actor_initialize() -> io::Result<(PrivateDesktopCore, tokio::runtime::Runtime
 
     let startup = StartupReceipt {
         desktop_name: core.desktop_name().to_owned(),
+        desktop_handle_addr,
         actor_desktop_name,
         blocking_desktop_name,
     };

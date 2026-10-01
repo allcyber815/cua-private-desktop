@@ -21,6 +21,10 @@ pub mod winforms_native;
 pub mod private_interference;
 
 #[cfg(target_os = "windows")]
+#[path = "execution_environment/private_observation.rs"]
+pub mod private_observation;
+
+#[cfg(target_os = "windows")]
 #[path = "execution_environment/private_visual.rs"]
 pub mod private_visual;
 

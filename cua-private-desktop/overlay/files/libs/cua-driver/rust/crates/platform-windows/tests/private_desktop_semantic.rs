@@ -16,6 +16,7 @@ unsafe extern "system" {
 }
 
 static WPF_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static DYNAMIC_WPF_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static WINFORMS_KEY_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static PRIVATE_DESKTOP_INTEGRATION_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
@@ -55,92 +56,99 @@ fn conformance_root() -> PathBuf {
     root
 }
 
+fn compile_wpf_fixture(source_name: &str, output_stem: &str) -> PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(source_name);
+    assert!(
+        source.is_file(),
+        "committed WPF fixture source missing: {}",
+        source.display()
+    );
+
+    let windir = std::env::var_os("WINDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let candidates = [
+        windir
+            .join("Microsoft.NET")
+            .join("Framework64")
+            .join("v4.0.30319"),
+        windir
+            .join("Microsoft.NET")
+            .join("Framework")
+            .join("v4.0.30319"),
+    ];
+    let framework = candidates
+        .iter()
+        .find(|candidate| candidate.join("csc.exe").is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "WPF fixture compiler missing; checked {} and {}",
+                candidates[0].display(),
+                candidates[1].display()
+            )
+        });
+    let references = [
+        framework.join("WPF").join("PresentationFramework.dll"),
+        framework.join("WPF").join("PresentationCore.dll"),
+        framework.join("WPF").join("WindowsBase.dll"),
+        framework.join("System.Xaml.dll"),
+    ];
+    for reference in &references {
+        assert!(
+            reference.is_file(),
+            "WPF fixture compiler reference missing: {}",
+            reference.display()
+        );
+    }
+
+    let output_dir = std::env::temp_dir().join("webgpt-cua-private-desktop-fixtures");
+    std::fs::create_dir_all(&output_dir).unwrap_or_else(|error| {
+        panic!(
+            "create WPF fixture output directory {}: {error}",
+            output_dir.display()
+        )
+    });
+    let executable = output_dir.join(format!("{output_stem}-{}.exe", std::process::id()));
+
+    let mut command = Command::new(framework.join("csc.exe"));
+    command
+        .arg("/nologo")
+        .arg("/target:winexe")
+        .arg(format!("/out:{}", executable.display()));
+    for reference in &references {
+        command.arg(format!("/reference:{}", reference.display()));
+    }
+    let output = command
+        .arg(&source)
+        .output()
+        .unwrap_or_else(|error| panic!("launch WPF fixture compiler: {error}"));
+    assert!(
+        output.status.success(),
+        "WPF fixture compile failed ({}): stdout={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        executable.is_file(),
+        "WPF fixture compiler did not create {}",
+        executable.display()
+    );
+    executable
+}
+
 fn wpf_fixture() -> &'static Path {
     WPF_FIXTURE
-        .get_or_init(|| {
-            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests")
-                .join("fixtures")
-                .join("WpfStableFixture.cs");
-            assert!(
-                source.is_file(),
-                "committed WPF fixture source missing: {}",
-                source.display()
-            );
+        .get_or_init(|| compile_wpf_fixture("WpfStableFixture.cs", "WpfStableFixture"))
+        .as_path()
+}
 
-            let windir = std::env::var_os("WINDIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-            let candidates = [
-                windir
-                    .join("Microsoft.NET")
-                    .join("Framework64")
-                    .join("v4.0.30319"),
-                windir
-                    .join("Microsoft.NET")
-                    .join("Framework")
-                    .join("v4.0.30319"),
-            ];
-            let framework = candidates
-                .iter()
-                .find(|candidate| candidate.join("csc.exe").is_file())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "WPF fixture compiler missing; checked {} and {}",
-                        candidates[0].display(),
-                        candidates[1].display()
-                    )
-                });
-            let references = [
-                framework.join("WPF").join("PresentationFramework.dll"),
-                framework.join("WPF").join("PresentationCore.dll"),
-                framework.join("WPF").join("WindowsBase.dll"),
-                framework.join("System.Xaml.dll"),
-            ];
-            for reference in &references {
-                assert!(
-                    reference.is_file(),
-                    "WPF fixture compiler reference missing: {}",
-                    reference.display()
-                );
-            }
-
-            let output_dir = std::env::temp_dir().join("webgpt-cua-private-desktop-fixtures");
-            std::fs::create_dir_all(&output_dir).unwrap_or_else(|error| {
-                panic!(
-                    "create WPF fixture output directory {}: {error}",
-                    output_dir.display()
-                )
-            });
-            let executable =
-                output_dir.join(format!("WpfStableFixture-{}.exe", std::process::id()));
-
-            let mut command = Command::new(framework.join("csc.exe"));
-            command
-                .arg("/nologo")
-                .arg("/target:winexe")
-                .arg(format!("/out:{}", executable.display()));
-            for reference in &references {
-                command.arg(format!("/reference:{}", reference.display()));
-            }
-            let output = command
-                .arg(&source)
-                .output()
-                .unwrap_or_else(|error| panic!("launch WPF fixture compiler: {error}"));
-            assert!(
-                output.status.success(),
-                "WPF fixture compile failed ({}): stdout={} stderr={}",
-                output.status,
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                executable.is_file(),
-                "WPF fixture compiler did not create {}",
-                executable.display()
-            );
-            executable
-        })
+fn dynamic_wpf_fixture() -> &'static Path {
+    DYNAMIC_WPF_FIXTURE
+        .get_or_init(|| compile_wpf_fixture("DynamicWpfEpochFixture.cs", "DynamicWpfEpochFixture"))
         .as_path()
 }
 
@@ -3055,6 +3063,46 @@ async fn phase_f_qt_select_is_blocked_by_real_cua_policy() {
     unsafe {
         let _ = CloseHandle(process);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_wpf_observation_epoch_tracks_structure_and_name_changes() {
+    let _serial = private_desktop_test_guard().await;
+    let fixture = dynamic_wpf_fixture();
+    assert!(fixture.is_file(), "fixture missing: {}", fixture.display());
+
+    let environment = platform_windows::execution_environment::PrivateEnvironmentHandle::start()
+        .expect("start private WPF observation environment");
+    let launch = environment
+        .launch_direct(fixture, &[], None)
+        .expect("launch dynamic WPF epoch fixture");
+    let window = launch
+        .windows
+        .iter()
+        .find(|window| window.title.contains("WebGPT Dynamic WPF Epoch Fixture"))
+        .unwrap_or_else(|| panic!("dynamic WPF private HWND missing: {:?}", launch.windows));
+
+    let epoch = environment
+        .wpf_observation_epoch(launch.pid, window.hwnd as u64)
+        .expect("register private WPF observation epoch");
+    let initial = epoch.current();
+
+    let mut observed = initial;
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        observed = epoch.current();
+        if observed > initial {
+            break;
+        }
+    }
+    assert!(
+        observed > initial,
+        "private WPF observation epoch did not advance after dynamic structure/name changes"
+    );
+
+    environment
+        .shutdown()
+        .expect("shutdown private WPF observation environment");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
