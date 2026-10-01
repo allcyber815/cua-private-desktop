@@ -161,6 +161,46 @@ pub const fn private_window_state_allowed(
     }
 }
 
+/// Poll a private-desktop semantic postcondition without shrinking the
+/// previously accepted ~1.9 second provider catch-up window.
+///
+/// UIA providers such as Chromium/WebView2 can acknowledge a mutation before
+/// their readback property catches up. Fast providers should not pay the old
+/// fixed 100 ms quantization, while slow providers retain the same bounded
+/// compatibility window. The probe returns an observed value plus whether it
+/// satisfies the postcondition; the last observed value is retained on timeout.
+pub fn poll_private_postcondition<T, F>(mut probe: F) -> Option<T>
+where
+    F: FnMut() -> Option<(T, bool)>,
+{
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_millis(1_900);
+    let mut last = None;
+
+    loop {
+        if let Some((value, matched)) = probe() {
+            if matched {
+                return Some(value);
+            }
+            last = Some(value);
+        }
+
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return last;
+        }
+        let elapsed = now.saturating_duration_since(started);
+        let poll_interval = if elapsed < std::time::Duration::from_millis(100) {
+            std::time::Duration::from_millis(10)
+        } else if elapsed < std::time::Duration::from_millis(500) {
+            std::time::Duration::from_millis(50)
+        } else {
+            std::time::Duration::from_millis(100)
+        };
+        std::thread::sleep(poll_interval.min(deadline.saturating_duration_since(now)));
+    }
+}
+
 /// Return the strict B3 allowlist decision for a framework/action pair.
 ///
 /// This is deliberately exhaustive and fail-closed. A future provider or action
