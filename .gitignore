@@ -1,0 +1,27 @@
+# Generated build/materialization state
+target/
+**/target/
+.cua-work/
+work/
+out/
+artifacts/
+dist/
+tmp/
+temp/
+
+# Logs, dumps, and transient diagnostics
+*.log
+*.dmp
+*.tmp
+*.bak
+*.zip
+
+# Local/runtime state
+.env
+.env.*
+!.env.example
+*.local
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

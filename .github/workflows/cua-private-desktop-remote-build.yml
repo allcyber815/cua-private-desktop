@@ -1,0 +1,49 @@
+name: CUA private desktop remote build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "chatgpt/cua-*"
+    paths:
+      - "cua-private-desktop/**"
+      - ".github/workflows/cua-private-desktop-remote-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cua-private-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and verify Windows CUA fork
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - name: Checkout overlay repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
+        with:
+          components: rustfmt
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build, test, and package
+        shell: pwsh
+        run: |
+          ./cua-private-desktop/scripts/build-cua-remote.ps1 -OutputDir "${{ runner.temp }}\\cua-artifact"
+
+      - name: Upload verified binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cua-private-desktop-windows-x64
+          path: ${{ runner.temp }}\\cua-artifact\\*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6

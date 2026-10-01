@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WebGPT Background Fixture Electron</title>
+<style>
+  body { font-family: sans-serif; background:#eef2f7; }
+  main { margin:40px; padding:32px; background:#fff; border:4px solid #222; font-size:22px; }
+  label, button, select { display:block; margin:16px 0; }
+  input, button, select { font-size:22px; padding:8px; }
+  #fixture-status { margin-top:20px; padding:12px; border:2px solid #555; min-height:28px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>WebGPT Background Fixture Electron</h1>
+  <label>Input <input id="fixture-input" aria-label="Fixture Input" value=""></label>
+  <button id="fixture-button">Background Action</button>
+  <label><input id="fixture-check" type="checkbox"> Background Check</label>
+  <label>Fixture Select
+    <select id="fixture-select">
+      <option>Red</option><option>Green</option><option>Blue</option>
+    </select>
+  </label>
+  <div id="fixture-status" role="status">idle</div>
+</main>
+<script>
+(() => {
+  const status=document.getElementById('fixture-status');
+  const input=document.getElementById('fixture-input');
+  const button=document.getElementById('fixture-button');
+  const check=document.getElementById('fixture-check');
+  const select=document.getElementById('fixture-select');
+  let clicks=0;
+  input.addEventListener('input',()=>status.textContent='text='+input.value);
+  input.addEventListener('change',()=>status.textContent='text='+input.value);
+  button.addEventListener('click',()=>status.textContent='clicked-'+(++clicks));
+  check.addEventListener('change',()=>status.textContent='check='+check.checked);
+  select.addEventListener('change',()=>status.textContent='selected='+select.value);
+})();
+</script>
+</body>
+</html>

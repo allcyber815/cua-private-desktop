@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Window
+    x:Class="winui_private_fixture.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="WebGPT Background Fixture WinUI">
+    <Grid Background="White">
+        <StackPanel Padding="40" Spacing="14">
+            <TextBlock Text="WebGPT Background Fixture WinUI" FontSize="28" FontWeight="SemiBold" />
+            <TextBox
+                x:Name="FixtureInput"
+                AutomationProperties.AutomationId="fixture-input"
+                AutomationProperties.Name="Fixture Input"
+                Header="Input"
+                TextChanged="FixtureInput_TextChanged" />
+            <Button
+                x:Name="FixtureButton"
+                AutomationProperties.AutomationId="fixture-button"
+                AutomationProperties.Name="Background Action"
+                Click="FixtureButton_Click"
+                Content="Background Action" />
+            <CheckBox
+                x:Name="FixtureCheck"
+                AutomationProperties.AutomationId="fixture-check"
+                AutomationProperties.Name="Background Check"
+                Checked="FixtureCheck_Changed"
+                Unchecked="FixtureCheck_Changed"
+                Content="Background Check" />
+            <ComboBox
+                x:Name="FixtureSelect"
+                AutomationProperties.AutomationId="fixture-select"
+                AutomationProperties.Name="Fixture Select"
+                Header="Fixture Select"
+                SelectedIndex="0"
+                SelectionChanged="FixtureSelect_SelectionChanged">
+                <ComboBoxItem Content="Red" />
+                <ComboBoxItem Content="Green" />
+                <ComboBoxItem Content="Blue" />
+            </ComboBox>
+            <TextBlock
+                x:Name="FixtureStatus"
+                AutomationProperties.AutomationId="fixture-status"
+                Text="idle"
+                FontSize="20" />
+        </StackPanel>
+    </Grid>
+</Window>

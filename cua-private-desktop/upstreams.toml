@@ -1,0 +1,12 @@
+schema = 1
+
+[cua]
+url = "https://github.com/trycua/cua.git"
+commit = "bf6c76786d938070f4ecf1e44004752f69f518b8"
+version = "0.30.4"
+license = "MIT"
+role = "primary Windows computer-use runtime with private-desktop strict-background and foreground/visual backends"
+
+[cua.private_desktop_overlay]
+path = "overlay"
+status = "rebased onto 0.30.4; full Windows compile/test/release verification passed with Rust 1.97.1 via the explicit local fallback after GitHub Actions was unavailable due to account billing"
