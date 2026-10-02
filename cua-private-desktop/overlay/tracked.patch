@@ -7101,10 +7101,10 @@ index 453d2ee5d499540421d55de8a16ff0efdf6944a5..30663645de832cac94cbaca4ceb93712
  #[cfg(test)]
  mod chromium_flag_injection_tests;
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs b/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
-index 19139b20932b6634978ca9e27cc29a21cc049411..b41f74511c43c5066ee4b642d3994eaf6f925609 100644
+index 19139b20932b6634978ca9e27cc29a21cc049411..276750b2481f6e4d62497d6ac425b63c6d9795ab 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/uia/cache.rs
-@@ -1,7 +1,15 @@
+@@ -1,10 +1,66 @@
  use super::UiaNode;
  use cua_driver_core::element_cache::{ElementCacheCore, SnapshotPayload};
  use windows::core::Interface;
@@ -7117,21 +7117,72 @@ index 19139b20932b6634978ca9e27cc29a21cc049411..b41f74511c43c5066ee4b642d3994eaf
 +    CUIAutomation, IAccessible, IUIAutomation, IUIAutomationElement, UIA_HelpTextPropertyId,
 +    UIA_IsEnabledPropertyId, UIA_ValueValuePropertyId,
 +};
-+use windows::Win32::UI::WindowsAndMessaging::IsChild;
++use windows::Win32::UI::WindowsAndMessaging::{
++    GetClassNameW, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId, IsChild, GWL_STYLE,
++};
  
  pub type ElementCache = ElementCacheCore<CachedSnapshot>;
  
-@@ -44,6 +52,65 @@ impl RetainedElement {
++/// Independently prove the live native identity used by the retained-witness
++/// fast path. UIA can keep a stale provider proxy across HWND destruction and
++/// numeric handle reuse, so a fresh UIA lookup is not by itself a generation
++/// proof. Restrict the fast path to native WinForms buttons whose current
++/// Win32 class, owning process, root relationship, and window text are all
++/// directly observable. Everything else falls back to the ordinary fresh walk.
++fn live_native_winforms_button_label(hwnd: HWND, root: HWND, expected_pid: u32) -> Option<String> {
++    if hwnd.0.is_null() || root.0.is_null() || hwnd == root {
++        return None;
++    }
++
++    let mut owner_pid = 0_u32;
++    if unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner_pid)) } == 0
++        || owner_pid != expected_pid
++        || !unsafe { IsChild(root, hwnd) }.as_bool()
++    {
++        return None;
++    }
++
++    let mut class_buf = [0_u16; 256];
++    let class_len = unsafe { GetClassNameW(hwnd, &mut class_buf) };
++    if class_len <= 0 {
++        return None;
++    }
++    let class_name = String::from_utf16_lossy(&class_buf[..class_len as usize]);
++    if class_name != "WindowsForms10.BUTTON" && !class_name.starts_with("WindowsForms10.BUTTON.") {
++        return None;
++    }
++
++    // WinForms ButtonBase controls share the BUTTON window class. Restrict the
++    // witness to actual push/default-push styles so a recycled HWND now owned
++    // by a CheckBox/RadioButton cannot inherit a stale UIA Button witness.
++    let button_kind = (unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32) & 0x0f;
++    if !matches!(button_kind, 0x00 | 0x01) {
++        return None;
++    }
++
++    let mut text_buf = [0_u16; 1024];
++    let text_len = unsafe { GetWindowTextW(hwnd, &mut text_buf) };
++    if text_len <= 0 || text_len as usize >= text_buf.len() - 1 {
++        return None;
++    }
++    let text = String::from_utf16_lossy(&text_buf[..text_len as usize]);
++    (!text.trim().is_empty()).then_some(text)
++}
++
+ #[derive(Debug)]
+ pub struct RetainedElement {
+     ptr: usize,
+@@ -44,6 +100,66 @@ impl RetainedElement {
          std::mem::forget(element);
          focused
      }
 +
 +    /// Re-prove a current positive existence witness without walking the
 +    /// subtree. The retained COM object is used only to recover its native HWND
-+    /// candidate. All identity and semantic properties are then read from a
-+    /// fresh UIA element resolved from that HWND. This is required because a
-+    /// retained provider proxy can keep returning stale properties after the
-+    /// underlying control is destroyed and Windows reuses the same numeric HWND.
++    /// candidate. The live HWND must independently prove a native WinForms
++    /// button identity and current text before fresh UIA semantics are trusted.
++    /// This cross-check is fail-closed because both retained and freshly
++    /// resolved UIA providers can remain stale after numeric HWND reuse.
 +    pub fn live_positive_entry(&self, pid: u32, root_hwnd: u64) -> Option<serde_json::Value> {
 +        if !self.is_uia() || self.ptr == 0 || pid == 0 || root_hwnd == 0 {
 +            return None;
@@ -7142,11 +7193,7 @@ index 19139b20932b6634978ca9e27cc29a21cc049411..b41f74511c43c5066ee4b642d3994eaf
 +        });
 +        let candidate_hwnd = unsafe { retained.CurrentNativeWindowHandle() }.ok()?;
 +        let root = HWND(root_hwnd as *mut _);
-+        if candidate_hwnd.0.is_null()
-+            || (candidate_hwnd != root && !unsafe { IsChild(root, candidate_hwnd) }.as_bool())
-+        {
-+            return None;
-+        }
++        let native_label = live_native_winforms_button_label(candidate_hwnd, root, pid)?;
 +
 +        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 +        let automation: IUIAutomation =
@@ -7168,6 +7215,9 @@ index 19139b20932b6634978ca9e27cc29a21cc049411..b41f74511c43c5066ee4b642d3994eaf
 +        let control_type = unsafe { element.CurrentControlType() }
 +            .ok()
 +            .map(|value| super::control_type_name(value.0))?;
++        if control_type != "Button" {
++            return None;
++        }
 +        let enabled =
 +            super::read_current_bool_property(&element, UIA_IsEnabledPropertyId).unwrap_or(true);
 +        if super::detect_current_actions(&element, &control_type, enabled).is_empty() {
@@ -7176,18 +7226,20 @@ index 19139b20932b6634978ca9e27cc29a21cc049411..b41f74511c43c5066ee4b642d3994eaf
 +        let label = super::current_nonempty_bstr(unsafe { element.CurrentName() })
 +            .or_else(|| super::read_current_bstr_property(&element, UIA_ValueValuePropertyId))
 +            .or_else(|| super::current_nonempty_bstr(unsafe { element.CurrentAutomationId() }))
-+            .or_else(|| super::read_current_bstr_property(&element, UIA_HelpTextPropertyId));
-+
-+        let mut entry = serde_json::json!({ "role": control_type });
-+        if let Some(label) = label {
-+            entry["label"] = serde_json::Value::String(label);
++            .or_else(|| super::read_current_bstr_property(&element, UIA_HelpTextPropertyId))?;
++        if label != native_label {
++            return None;
 +        }
-+        Some(entry)
++
++        Some(serde_json::json!({
++            "role": "Button",
++            "label": native_label,
++        }))
 +    }
  }
  
  impl Clone for RetainedElement {
-@@ -115,6 +182,14 @@ impl CachedSnapshot {
+@@ -115,6 +231,14 @@ impl CachedSnapshot {
                  .collect(),
          }
      }
