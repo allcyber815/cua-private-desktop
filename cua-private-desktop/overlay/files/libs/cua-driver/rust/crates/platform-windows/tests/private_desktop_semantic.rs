@@ -871,19 +871,36 @@ async fn private_registry_launch_snapshot_set_value_readback_and_session_cleanup
     );
     let _ = std::fs::remove_file(&visual_path);
 
-    let first_snapshot = registry
-        .invoke(
-            "get_window_state",
-            json!({
-                "session": session,
-                "pid": pid,
-                "window_id": window_id,
-                "include_screenshot": false,
-            }),
+    let mut input_token = None;
+    let mut last_snapshot = None;
+    for _ in 0..60 {
+        let first_snapshot = registry
+            .invoke(
+                "get_window_state",
+                json!({
+                    "session": session,
+                    "pid": pid,
+                    "window_id": window_id,
+                    "include_screenshot": false,
+                }),
+            )
+            .await;
+        assert_ok("get_window_state before", &first_snapshot);
+        let snapshot_json = structured(&first_snapshot).clone();
+        if let Some(token) = try_find_input_token(&snapshot_json) {
+            input_token = Some(token);
+            last_snapshot = Some(snapshot_json);
+            break;
+        }
+        last_snapshot = Some(snapshot_json);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let input_token = input_token.unwrap_or_else(|| {
+        panic!(
+            "WPF Fixture Input did not become semantically addressable: {}",
+            last_snapshot.unwrap_or(Value::Null)
         )
-        .await;
-    assert_ok("get_window_state before", &first_snapshot);
-    let input_token = find_input_token(structured(&first_snapshot));
+    });
 
     let expected = "phase2-registry-value";
     let set = registry
