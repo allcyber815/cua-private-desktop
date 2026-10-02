@@ -9,7 +9,7 @@ use super::win32_private::{
     attach_current_thread_to, current_thread_desktop_name, PrivateChild, PrivateDesktopCore,
     PrivateJobProbe, PrivateWindowInfo,
 };
-use super::IsolationMode;
+use super::{IsolationMode, PrivateFramework};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -46,6 +46,15 @@ pub struct PrivateEnvironmentReceipt {
     pub desktop_name: String,
     pub actor_affinity_verified: bool,
     pub blocking_affinity_verified: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrivateTargetProfile {
+    pub exe_basename: String,
+    pub class_name: String,
+    pub framework: PrivateFramework,
+    pub worker_integrity_rid: u32,
+    pub target_integrity_rid: u32,
 }
 
 struct StartupReceipt {
@@ -85,6 +94,7 @@ enum ActorCommand {
 pub struct PrivateDesktopRuntime {
     sender: mpsc::Sender<ActorCommand>,
     join: Mutex<Option<JoinHandle<()>>>,
+    target_profiles: Mutex<HashMap<(u32, u64), PrivateTargetProfile>>,
     desktop_name: String,
     actor_desktop_name: String,
     blocking_desktop_name: String,
@@ -117,6 +127,7 @@ impl PrivateDesktopRuntime {
         Ok(Arc::new(Self {
             sender,
             join: Mutex::new(Some(join)),
+            target_profiles: Mutex::new(HashMap::new()),
             desktop_name: startup.desktop_name,
             actor_desktop_name: startup.actor_desktop_name,
             blocking_desktop_name: startup.blocking_desktop_name,
@@ -132,12 +143,42 @@ impl PrivateDesktopRuntime {
         }
     }
 
+    pub fn cached_target_profile(
+        &self,
+        pid: u32,
+        hwnd: u64,
+        class_name: &str,
+    ) -> Option<PrivateTargetProfile> {
+        let key = (pid, hwnd);
+        let mut profiles = self.target_profiles.lock().ok()?;
+        match profiles.get(&key) {
+            Some(profile) if profile.class_name == class_name => Some(profile.clone()),
+            Some(_) => {
+                profiles.remove(&key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    pub fn cache_target_profile(&self, pid: u32, hwnd: u64, profile: PrivateTargetProfile) {
+        if let Ok(mut profiles) = self.target_profiles.lock() {
+            profiles.insert((pid, hwnd), profile);
+        }
+    }
+
     pub fn launch_direct(
         &self,
         program: &Path,
         args: &[OsString],
         current_directory: Option<&Path>,
     ) -> io::Result<PrivateLaunchResult> {
+        // A new process can eventually reuse an old numeric PID/HWND pair.
+        // Drop all cached provider identities at this lifecycle boundary so a
+        // later action can never inherit classification from a prior launch.
+        if let Ok(mut profiles) = self.target_profiles.lock() {
+            profiles.clear();
+        }
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         self.sender
             .send(ActorCommand::LaunchDirect {
@@ -243,6 +284,36 @@ impl PrivateDesktopRuntime {
         reply_rx
             .recv_timeout(ACTOR_REPLY_TIMEOUT)
             .map_err(|error| anyhow::anyhow!("private blocking actor reply timed out: {error}"))?
+    }
+
+    pub async fn run_attached_blocking_async<T, F>(&self, task: F) -> anyhow::Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let actor_task = Box::new(move |runtime: &tokio::runtime::Runtime| {
+            let result = runtime.block_on(async {
+                tokio::task::spawn_blocking(task)
+                    .await
+                    .map_err(|error| anyhow::anyhow!("private blocking task panicked: {error}"))?
+            });
+            let _ = reply_tx.send(result);
+        });
+        self.sender
+            .send(ActorCommand::RunAttachedBlocking { task: actor_task })
+            .map_err(|_| anyhow::anyhow!("private desktop actor stopped"))?;
+
+        match tokio::time::timeout(ACTOR_REPLY_TIMEOUT, reply_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(anyhow::anyhow!(
+                "private desktop actor stopped before replying to async blocking task"
+            )),
+            Err(_) => Err(anyhow::anyhow!(
+                "private async blocking actor reply timed out after {:?}",
+                ACTOR_REPLY_TIMEOUT
+            )),
+        }
     }
 
     pub fn shutdown(&self) -> Result<(), String> {
