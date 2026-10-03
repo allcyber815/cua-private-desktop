@@ -27,7 +27,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - name: Checkout overlay repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
@@ -41,7 +41,7 @@ jobs:
           ./cua-private-desktop/scripts/build-cua-remote.ps1 -OutputDir "${{ runner.temp }}\\cua-artifact"
 
       - name: Upload verified binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cua-private-desktop-windows-x64
           path: ${{ runner.temp }}\\cua-artifact\\*
