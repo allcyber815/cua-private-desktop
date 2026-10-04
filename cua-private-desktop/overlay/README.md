@@ -10,7 +10,7 @@ This directory captures the WebGPT private-desktop delta rebased onto the exact 
 
 Ordinary development must not require a full CUA clone, a preserved Cargo target tree, or the multi-provider fixture runtime.
 
-- `scripts\materialize-cua.ps1` fetches one exact commit with `--depth=1 --filter=blob:none` and sparsely hydrates `libs/cua-driver/rust`, `libs/cua`, and `libs/fleet`: the minimal source workspace closure required by CUA 0.33.1 metadata/format validation.
+- `scripts\materialize-cua.ps1` fetches one exact commit with `--depth=1 --filter=blob:none` and sparsely hydrates `libs/cua-driver/rust`, `libs/cua`, `libs/fleet`, and `libs/images`: the minimal source/workspace closure required by CUA 0.33.1 metadata/format validation and `cua-telemetry` compile-time assets.
 - Routine rebase checks are source-only: patch preflight/application, `cargo +stable metadata --no-deps --locked`, and `cargo +stable fmt --all -- --check`.
 - Do not invoke bare `cargo` from this checkout when the pinned upstream toolchain is not already installed; an explicit already-installed compatible toolchain avoids an unnecessary Rust toolchain download.
 - Cargo check/build/test output normally comes from the GitHub Actions Windows release-candidate lane. `scripts\build-cua-remote.ps1` still refuses local deep builds by default; `-AllowLocalBuild` is an explicit fallback for an unavailable remote lane and runs the same materialization, regression, release-build, signed-helper, and receipt checks with the exact pinned Rust 1.97.1 toolchain. Keep fallback target/output trees disposable.

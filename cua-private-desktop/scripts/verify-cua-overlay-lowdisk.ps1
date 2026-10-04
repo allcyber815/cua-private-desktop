@@ -19,6 +19,15 @@ try {
 
     $RustRoot = Join-Path $Destination 'libs\cua-driver\rust'
 
+    foreach ($requiredSourceAsset in @(
+        (Join-Path $Destination 'libs\images\sandbox-images.json'),
+        (Join-Path $Destination 'libs\cua\crates\cua-teleport\src\ux\targets.json')
+    )) {
+        if (-not (Test-Path -LiteralPath $requiredSourceAsset)) {
+            throw "required CUA 0.33.1 compile-time source asset missing: $requiredSourceAsset"
+        }
+    }
+
     # The upstream checkout currently pins a Rust toolchain that may not be
     # installed locally. Explicit +stable prevents rustup from downloading that
     # historical toolchain during ordinary source-only verification.

@@ -26,15 +26,15 @@ git -C $Destination remote add origin $Upstream
 if ($LASTEXITCODE -ne 0) { throw 'git remote add failed' }
 
 # Keep ordinary materialization source-only and small: fetch one exact commit
-# without blobs, then hydrate the driver plus the local path-dependency workspaces
-# required by CUA 0.33.1 metadata/format validation.
+# without blobs, then hydrate the driver, its local path-dependency workspaces,
+# and the compile-time image catalog consumed by cua-telemetry.
 git -C $Destination -c protocol.version=2 fetch --depth=1 --filter=blob:none origin $Pin
 if ($LASTEXITCODE -ne 0) { throw 'filtered git fetch failed' }
 
 git -C $Destination sparse-checkout init --cone
 if ($LASTEXITCODE -ne 0) { throw 'sparse-checkout init failed' }
 
-git -C $Destination sparse-checkout set libs/cua-driver/rust libs/cua libs/fleet
+git -C $Destination sparse-checkout set libs/cua-driver/rust libs/cua libs/fleet libs/images
 if ($LASTEXITCODE -ne 0) { throw 'sparse-checkout set failed' }
 
 git -C $Destination checkout --detach FETCH_HEAD
