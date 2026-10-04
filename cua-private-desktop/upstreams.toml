@@ -2,11 +2,11 @@ schema = 1
 
 [cua]
 url = "https://github.com/trycua/cua.git"
-commit = "5272e492d61b96caf08e3bf434d91126c1f3dccc"
-version = "0.31.0"
+commit = "a9baa8d107fba8b0aef5a4ed6233e498e88d14d0"
+version = "0.33.1"
 license = "MIT"
 role = "primary Windows computer-use runtime with private-desktop strict-background and foreground/visual backends"
 
 [cua.private_desktop_overlay]
 path = "overlay"
-status = "semantic rebase onto 0.31.0 prepared; source-only low-disk checks passed; GitHub Actions Windows is the authoritative compile/test/release verifier"
+status = "semantic rebase onto 0.33.1 prepared; source-only low-disk checks passed; GitHub Actions Windows is the authoritative compile/test/release verifier"

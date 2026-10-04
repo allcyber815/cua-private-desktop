@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$Pin = '5272e492d61b96caf08e3bf434d91126c1f3dccc'
+$Pin = 'a9baa8d107fba8b0aef5a4ed6233e498e88d14d0'
 $Upstream = 'https://github.com/trycua/cua.git'
 $Overlay = Join-Path $RepoRoot 'overlay'
 
@@ -26,14 +26,15 @@ git -C $Destination remote add origin $Upstream
 if ($LASTEXITCODE -ne 0) { throw 'git remote add failed' }
 
 # Keep ordinary materialization source-only and small: fetch one exact commit
-# without blobs, then hydrate only the CUA Rust subtree that the overlay owns.
+# without blobs, then hydrate the driver plus the local path-dependency workspaces
+# required by CUA 0.33.1 metadata/format validation.
 git -C $Destination -c protocol.version=2 fetch --depth=1 --filter=blob:none origin $Pin
 if ($LASTEXITCODE -ne 0) { throw 'filtered git fetch failed' }
 
 git -C $Destination sparse-checkout init --cone
 if ($LASTEXITCODE -ne 0) { throw 'sparse-checkout init failed' }
 
-git -C $Destination sparse-checkout set libs/cua-driver/rust
+git -C $Destination sparse-checkout set libs/cua-driver/rust libs/cua libs/fleet
 if ($LASTEXITCODE -ne 0) { throw 'sparse-checkout set failed' }
 
 git -C $Destination checkout --detach FETCH_HEAD

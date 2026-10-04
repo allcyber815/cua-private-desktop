@@ -1,6 +1,6 @@
 # CUA private-desktop overlay
 
-This directory captures the WebGPT private-desktop delta rebased onto the exact CUA 0.31.0 commit pinned in the bundle's `upstreams.toml`. The semantic rebase preserves CUA 0.31.0's element-token-only action addressing, snapshot replacement/invalidation behavior, walk budgets, screenshot ownership, timeout, and browser-installation safety contracts while retaining the WebGPT private-desktop semantic/value actions, background input delivery, attached UIA, trusted PrintWindow capture, interference receipts, and session-aware verification. GitHub Actions Windows is the authoritative deep-build lane; when that lane is unavailable, the same pinned build pipeline can be run explicitly on the local Windows host with `-AllowLocalBuild`.
+This directory captures the WebGPT private-desktop delta rebased onto the exact CUA 0.33.1 commit pinned in the bundle's `upstreams.toml`. The semantic rebase preserves CUA 0.33.1's element-token-only action addressing, snapshot replacement/invalidation behavior, walk budgets, screenshot ownership, timeout, and browser-installation safety contracts while retaining the WebGPT private-desktop semantic/value actions, background input delivery, attached UIA, trusted PrintWindow capture, interference receipts, and session-aware verification. GitHub Actions Windows is the authoritative deep-build lane; when that lane is unavailable, the same pinned build pipeline can be run explicitly on the local Windows host with `-AllowLocalBuild`.
 
 - `tracked.patch` contains modifications to files already tracked by upstream CUA, including the additive ABI 1.2 daemon-connect seam retained by the promoted CUA private-desktop overlay.
 - `files/` contains new text/source files introduced by the private-desktop implementation.
@@ -10,7 +10,7 @@ This directory captures the WebGPT private-desktop delta rebased onto the exact 
 
 Ordinary development must not require a full CUA clone, a preserved Cargo target tree, or the multi-provider fixture runtime.
 
-- `scripts\materialize-cua.ps1` fetches one exact commit with `--depth=1 --filter=blob:none` and hydrates only `libs/cua-driver/rust` through sparse checkout.
+- `scripts\materialize-cua.ps1` fetches one exact commit with `--depth=1 --filter=blob:none` and sparsely hydrates `libs/cua-driver/rust`, `libs/cua`, and `libs/fleet`: the minimal source workspace closure required by CUA 0.33.1 metadata/format validation.
 - Routine rebase checks are source-only: patch preflight/application, `cargo +stable metadata --no-deps --locked`, and `cargo +stable fmt --all -- --check`.
 - Do not invoke bare `cargo` from this checkout when the pinned upstream toolchain is not already installed; an explicit already-installed compatible toolchain avoids an unnecessary Rust toolchain download.
 - Cargo check/build/test output normally comes from the GitHub Actions Windows release-candidate lane. `scripts\build-cua-remote.ps1` still refuses local deep builds by default; `-AllowLocalBuild` is an explicit fallback for an unavailable remote lane and runs the same materialization, regression, release-build, signed-helper, and receipt checks with the exact pinned Rust 1.97.1 toolchain. Keep fallback target/output trees disposable.

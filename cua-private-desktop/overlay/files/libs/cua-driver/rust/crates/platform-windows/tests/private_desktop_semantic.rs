@@ -1831,7 +1831,7 @@ async fn private_drag_posts_inside_private_desktop_and_refuses_nonclient_input()
     let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
     assert!(!process.is_null(), "cannot open launched pid {pid}");
 
-    // CUA 0.31.0 interprets window-local pointer coordinates against the
+    // CUA 0.33.1 interprets window-local pointer coordinates against the
     // screenshot context published by get_window_state. Establish that context
     // explicitly before testing the private-desktop drag delivery policy.
     let snapshot = registry

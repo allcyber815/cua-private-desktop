@@ -9,7 +9,7 @@ $OverlayRoot = Join-Path $RepoRoot 'overlay'
 $FilesRoot = Join-Path $OverlayRoot 'files\libs\cua-driver\rust'
 $PatchPath = Join-Path $OverlayRoot 'tracked.patch'
 
-$expectedHead = '5272e492d61b96caf08e3bf434d91126c1f3dccc'
+$expectedHead = 'a9baa8d107fba8b0aef5a4ed6233e498e88d14d0'
 $actualHead = (& git -C $SourceRepo rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw 'git rev-parse failed' }
 if ($actualHead -ne $expectedHead) {
