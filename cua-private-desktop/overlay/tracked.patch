@@ -12,10 +12,10 @@ index 1f52857db761b1283e4390b703216844b0e2e00a..33693fb0d18f93684a36c285083b9f11
          ToolAnnotations {
              read_only: false,
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
-index 5dceca8495e1fd6208b8452001615e462f9855dd..1636dab72a2d19f365f782b2332c247e10554122 100644
+index 5516b293393e6a275634cf56ae20de83d04352d9..dbfb7d008db12d59629f31b2c54293aa1b32bf72 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
-@@ -62,14 +62,16 @@ pub use outputs::{
+@@ -64,14 +64,16 @@ pub use outputs::{
      advertised_output_schema, conforming_error_envelope, is_refusal_envelope,
      refusal_envelope_schema, ActionDelivery, ActionDeliveryMode, ActionEffect, ActionError,
      ActionEscalation, ActionEscalationReason, ActionEscalationTarget, ActionEvidence,
@@ -41,10 +41,10 @@ index 5dceca8495e1fd6208b8452001615e462f9855dd..1636dab72a2d19f365f782b2332c247e
  pub use verification::{
      BoundsExpectation, ElementPredicate, ElementSelector, PredicateOutcome, StatePredicate,
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
-index fdd0619fa3b985e58460df99299543357229f945..ba584a4ac863797378f79e5e6f6ba9f9d27ff131 100644
+index 188eb07e953349d9d5254b750516d679197a3cf1..49437ba4d80c1f37521bfa7911f535ea5a21a14a 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/outputs.rs
-@@ -600,6 +600,7 @@ pub struct ActionDelivery {
+@@ -629,6 +629,7 @@ pub struct ActionDelivery {
  pub enum ActionEvidenceKind {
      ValueReadback,
      WindowChange,
@@ -52,7 +52,7 @@ index fdd0619fa3b985e58460df99299543357229f945..ba584a4ac863797378f79e5e6f6ba9f9
  }
  
  #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, uniffi::Record)]
-@@ -621,6 +622,64 @@ pub struct ActionError {
+@@ -650,6 +651,64 @@ pub struct ActionError {
      pub hint: Option<String>,
  }
  
@@ -117,7 +117,7 @@ index fdd0619fa3b985e58460df99299543357229f945..ba584a4ac863797378f79e5e6f6ba9f9
  #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, uniffi::Enum)]
  #[serde(rename_all = "snake_case")]
  pub enum ActionEscalationTarget {
-@@ -667,6 +726,12 @@ pub struct ActionResult {
+@@ -696,6 +755,12 @@ pub struct ActionResult {
      /// Present only with `effect: refused`.
      #[serde(default, skip_serializing_if = "Option::is_none")]
      pub error: Option<ActionError>,
@@ -130,7 +130,7 @@ index fdd0619fa3b985e58460df99299543357229f945..ba584a4ac863797378f79e5e6f6ba9f9
  }
  
  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-@@ -819,6 +884,9 @@ mod tests {
+@@ -848,6 +913,9 @@ mod tests {
              escalation: None,
              summary: None,
              error: None,
@@ -140,7 +140,7 @@ index fdd0619fa3b985e58460df99299543357229f945..ba584a4ac863797378f79e5e6f6ba9f9
          }
      }
  
-@@ -879,8 +947,11 @@ mod tests {
+@@ -908,8 +976,11 @@ mod tests {
                  "error",
                  "escalation",
                  "evidence",
@@ -153,7 +153,7 @@ index fdd0619fa3b985e58460df99299543357229f945..ba584a4ac863797378f79e5e6f6ba9f9
              ]
          );
          assert_eq!(
-@@ -929,7 +1000,7 @@ mod tests {
+@@ -958,7 +1029,7 @@ mod tests {
          assert_eq!(evidence["required"], json!(["kind"]));
          assert_eq!(
              evidence["properties"]["kind"]["enum"],
@@ -538,10 +538,10 @@ index 188cec2f6c8984cc9c00b08009ff49f386530e7c..996586cb670a342efacbeec9270becf6
  }
  
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/snapshot_store.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/snapshot_store.rs
-index b30a5573d7324f558c50a56f73588cf10977ca07..778ee7717023e89ae2d717856d3c4e9f9d9bf2d7 100644
+index e61290c894ffc15abbbfba64445a8c306c548697..b8d1653d1154841802bccab0acf627989f245a5f 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/snapshot_store.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/snapshot_store.rs
-@@ -137,6 +137,27 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
+@@ -140,6 +140,27 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
              .0
      }
  
@@ -1864,10 +1864,10 @@ index 36339073be1b71a16cf5eebbfd22acde8053a812..2ea36e51597a2262fc829065013e2eba
  /// for SAL/VCL targets where the UIA walker would hang.
  pub fn walk_msaa_tree(hwnd: u64) -> UiaTreeResult {
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d274eb4cdc 100644
+index 5bb612937cf929fbbb112471e3aea23172495783..65a54d62bae0d13cccb148e19227df7a7f58b7e5 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-@@ -594,11 +594,13 @@ pub fn load_driver_config() -> DriverConfig {
+@@ -620,11 +620,13 @@ pub fn load_driver_config() -> DriverConfig {
      cfg
  }
  
@@ -1881,7 +1881,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
      pub config: Arc<RwLock<DriverConfig>>,
      capture_bridge: Option<Arc<crate::capture_admission::WindowsCaptureBridge>>,
  }
-@@ -610,6 +612,9 @@ impl ToolState {
+@@ -636,6 +638,9 @@ impl ToolState {
          Arc::new(Self {
              snapshots: Arc::new(Snapshots::new()),
              cursor_registry: Arc::new(CursorRegistry::new()),
@@ -1891,7 +1891,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
              config: Arc::new(RwLock::new(load_driver_config())),
              capture_bridge: capture_service
                  .map(crate::capture_admission::WindowsCaptureBridge::new),
-@@ -630,6 +635,177 @@ impl ToolState {
+@@ -656,6 +661,177 @@ impl ToolState {
      }
  }
  
@@ -2069,7 +2069,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  fn screenshot_scale(
      state: &ToolState,
      args: &Value,
-@@ -1228,40 +1404,80 @@ impl Tool for GetWindowStateTool {
+@@ -1254,40 +1430,80 @@ impl Tool for GetWindowStateTool {
                   the target app's windows, or read `launch_app`'s `windows` array.",
                  ),
              };
@@ -2181,7 +2181,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          let app_name = tokio::task::spawn_blocking(move || {
              crate::win32::list_processes()
                  .into_iter()
-@@ -1356,6 +1572,8 @@ impl Tool for GetWindowStateTool {
+@@ -1382,6 +1598,8 @@ impl Tool for GetWindowStateTool {
          let state = self.state.clone();
          let q = query.clone();
          let out_file = screenshot_out_file.clone();
@@ -2190,7 +2190,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          // The tree walk runs under `timeout_ms`. UIA's bulk BuildUpdatedCache
          // cannot be interrupted (Chrome's provider can block indefinitely on
          // property reads), so when the walk task itself outlives the budget
-@@ -1363,22 +1581,39 @@ impl Tool for GetWindowStateTool {
+@@ -1389,22 +1607,39 @@ impl Tool for GetWindowStateTool {
          // error, and the screenshot below still comes back.
          let tree_result = if do_tree {
              let tree_task = tokio::task::spawn_blocking(move || {
@@ -2241,7 +2241,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                  Ok(Err(e)) => return ToolResult::error(format!("UIA walk task panicked: {e}")),
                  Err(_elapsed) => {
                      let class = crate::input::delivery::read_class_name(hwnd);
-@@ -1404,43 +1639,82 @@ impl Tool for GetWindowStateTool {
+@@ -1430,43 +1665,82 @@ impl Tool for GetWindowStateTool {
          } else {
              None
          };
@@ -2357,7 +2357,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          });
          let result: anyhow::Result<_> =
              match tokio::time::timeout(UIA_SCREENSHOT_TIMEOUT, blocking).await {
-@@ -1453,21 +1727,30 @@ impl Tool for GetWindowStateTool {
+@@ -1479,21 +1753,30 @@ impl Tool for GetWindowStateTool {
                          "window capture did not finish within {}s",
                          UIA_SCREENSHOT_TIMEOUT.as_secs()
                      )),
@@ -2392,7 +2392,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                  if let Some((tr, payload, walk)) = tree_opt {
                      let is_msaa = tr.nodes.iter().any(|node| node.msaa_role.is_some());
                      let count = tr
-@@ -2086,9 +2369,30 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
+@@ -2112,9 +2395,30 @@ async fn restore_foreground_polling_best_effort(prior_foreground_addr: usize, sp
  /// than left behind.
  const STANDARD_USER_SHELL_LAUNCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
  
@@ -2424,7 +2424,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  #[async_trait]
  impl Tool for LaunchAppTool {
      fn def(&self) -> &ToolDef {
-@@ -2130,6 +2434,8 @@ impl Tool for LaunchAppTool {
+@@ -2156,6 +2460,8 @@ impl Tool for LaunchAppTool {
                  parameters or as the AUMID activation arguments string). \
                  The remaining macOS-only fields currently no-op on Windows.".into(),
              input_schema: json!({"type":"object","properties":{
@@ -2433,7 +2433,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                  "bundle_id":{"type":"string","description":"App User Model ID (AUMID) for a packaged app — pattern `{PackageFamilyName}!{ApplicationId}`, e.g. `Microsoft.WindowsNotepad_8wekyb3d8bbwe!App`. Falls back to a `name` alias if no `!` is present. Either bundle_id, name, aumid, path, or launch_path must be provided."},
                  "aumid":{"type":"string","description":"Explicit AUMID for a packaged app. Cleaner alternative to overloading `bundle_id`. Takes precedence over `bundle_id` / `name` when present."},
                  "name":{"type":"string","description":"App display name. Tried against the `shell:AppsFolder` index first for packaged-app lookup; on a miss, passed to ShellExecuteEx's PATH search."},
-@@ -2146,6 +2452,15 @@ impl Tool for LaunchAppTool {
+@@ -2172,6 +2478,15 @@ impl Tool for LaunchAppTool {
      }
  
      async fn invoke(&self, args: Value) -> ToolResult {
@@ -2449,7 +2449,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          let launch_path_opt = args
              .get("launch_path")
              .and_then(|v| v.as_str())
-@@ -2173,6 +2488,222 @@ impl Tool for LaunchAppTool {
+@@ -2199,6 +2514,222 @@ impl Tool for LaunchAppTool {
              .get("start_minimized")
              .and_then(|v| v.as_bool())
              .unwrap_or(false);
@@ -2672,7 +2672,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          // `nShow` for the ShellExecuteEx-based launches. SW_SHOWNOACTIVATE
          // keeps the new window from grabbing focus but still renders it on
          // top of the previous frontmost window. SW_SHOWMINNOACTIVE both
-@@ -3173,23 +3704,1120 @@ fn background_element_click_result(
+@@ -3199,23 +3730,1120 @@ fn background_element_click_result(
          .with_action_record(record)
  }
  
@@ -3807,7 +3807,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                  pixel coordinates** — element_token works on backgrounded / minimized / \
                  hidden / off-desktop windows, surfaces a stable handle that survives \
                  rebuilds, and tells you what you're clicking via the cached element's \
-@@ -3247,7 +4875,7 @@ impl Tool for ClickTool {
+@@ -3273,7 +4901,7 @@ impl Tool for ClickTool {
                      "modifier": cua_driver_core::tool_schema::modifier_schema(),
                      "from_zoom":{"type":"boolean","description":"When true, x and y are pixel coordinates in the last `zoom` image for this pid. The driver maps them back to window coords."},
                      "scope":{"type":"string","enum":["window","desktop"],"default":"window","description":"Coordinate frame (default \"window\"). Pass \"desktop\" with x,y and no pid/window_id for a screen-absolute click in get_desktop_state coordinates."},
@@ -3816,7 +3816,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                  },"additionalProperties":false
              }),
              read_only: false, destructive: true, idempotent: false, open_world: true,
-@@ -3259,6 +4887,18 @@ impl Tool for ClickTool {
+@@ -3285,6 +4913,18 @@ impl Tool for ClickTool {
          use crate::uia::snapshot::SnapshotKind;
          use cua_driver_core::tool_args::ArgsExt;
          let cursor_key = resolve_cursor_key(&args);
@@ -3835,7 +3835,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  
          // ── Window-less screen-absolute branch (desktop target) ───────────────
          // When the caller gives x,y with NO pid/window_id, treat x,y as TRUE
-@@ -3269,6 +4909,16 @@ impl Tool for ClickTool {
+@@ -3295,6 +4935,16 @@ impl Tool for ClickTool {
          let has_xy = args.get("x").map(|v| v.is_number()).unwrap_or(false)
              && args.get("y").map(|v| v.is_number()).unwrap_or(false);
          if !has_pid && !has_window_id && has_xy {
@@ -3852,7 +3852,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
              if !is_windowless_desktop_action(&args) {
                  return ToolResult::error(
                      "click: x,y given with no pid/window_id requires scope=\"desktop\"; \
-@@ -3428,6 +5078,18 @@ impl Tool for ClickTool {
+@@ -3454,6 +5104,18 @@ impl Tool for ClickTool {
                  }
              }));
          }
@@ -3871,7 +3871,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          // Optional `action` arg picks among the actions exposed in the
          // accessibility tree. Today this only changes behavior for MSAA
          // BUTTONDROPDOWN: `"expand"` clicks the right-edge (dropdown arrow
-@@ -3442,6 +5104,16 @@ impl Tool for ClickTool {
+@@ -3468,6 +5130,16 @@ impl Tool for ClickTool {
          // Resolve HWND: explicit, or auto from pid.
          let hwnd = match hwnd_opt {
              Some(h) => h,
@@ -3888,7 +3888,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
              None => {
                  let windows = tokio::task::spawn_blocking({
                      let admitted = admitted.clone();
-@@ -3504,6 +5176,70 @@ impl Tool for ClickTool {
+@@ -3530,6 +5202,70 @@ impl Tool for ClickTool {
              _ => None,
          };
  
@@ -3959,7 +3959,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          if let Some(idx) = elem_idx {
              // ── MSAA dispatch (SAL/VCL targets) ────────────────────────────
              // For MSAA elements, route by role:
-@@ -4373,6 +6109,194 @@ async fn focus_by_pixel(
+@@ -4411,6 +6147,194 @@ async fn focus_by_pixel(
      Ok(())
  }
  
@@ -4154,7 +4154,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  pub struct TypeTextTool {
      state: Arc<ToolState>,
  }
-@@ -4496,6 +6420,29 @@ impl Tool for TypeTextTool {
+@@ -4534,6 +6458,29 @@ impl Tool for TypeTextTool {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
          let cursor_key = resolve_cursor_key(&args);
@@ -4184,7 +4184,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          if args.get("scope").and_then(Value::as_str) == Some("desktop")
              && args.get("pid").is_none()
              && args.get("window_id").is_none()
-@@ -4550,6 +6497,54 @@ impl Tool for TypeTextTool {
+@@ -4588,6 +6535,54 @@ impl Tool for TypeTextTool {
          };
          let (elem_idx, hwnd_opt, admitted) = resolved.into_parts(args.opt_u64("window_id"));
          let delivery = DeliveryMode::from_args(&args);
@@ -4239,7 +4239,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  
          // ── px form: focus by pixel-click, then type into the focused element ──
          // Pass x,y (no element_token) for an *element px action*: pixel-click the
-@@ -5194,6 +7189,29 @@ impl Tool for PressKeyTool {
+@@ -5244,6 +7239,29 @@ impl Tool for PressKeyTool {
      async fn invoke(&self, args: Value) -> ToolResult {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
@@ -4269,7 +4269,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          if args.get("scope").and_then(Value::as_str) == Some("desktop")
              && args.get("pid").is_none()
              && args.get("window_id").is_none()
-@@ -5202,46 +7220,363 @@ impl Tool for PressKeyTool {
+@@ -5252,46 +7270,363 @@ impl Tool for PressKeyTool {
                  Ok(input) => input,
                  Err(result) => return result,
              };
@@ -4667,7 +4667,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          // Swift requires window_id when element_index is supplied — ports the
          // same validation.
  
-@@ -5546,6 +7881,29 @@ impl Tool for HotkeyTool {
+@@ -5596,6 +7931,29 @@ impl Tool for HotkeyTool {
      async fn invoke(&self, args: Value) -> ToolResult {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
@@ -4697,7 +4697,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          if args.get("scope").and_then(Value::as_str) == Some("desktop")
              && args.get("pid").is_none()
              && args.get("window_id").is_none()
-@@ -5596,53 +7954,311 @@ impl Tool for HotkeyTool {
+@@ -5646,53 +8004,311 @@ impl Tool for HotkeyTool {
                  Err(error) => ToolResult::error(format!("desktop hotkey task failed: {error}")),
              };
          }
@@ -5056,7 +5056,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  
          // Resolve HWND: use window_id if given, else pick first window for pid.
          let hwnd = match hwnd_opt {
-@@ -5862,6 +8478,260 @@ impl Tool for HotkeyTool {
+@@ -5912,6 +8528,260 @@ impl Tool for HotkeyTool {
  
  // ── set_value ─────────────────────────────────────────────────────────────────
  
@@ -5317,7 +5317,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  pub struct SetValueTool {
      state: Arc<ToolState>,
  }
-@@ -5870,6 +8740,10 @@ static SET_VALUE_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
+@@ -5920,6 +8790,10 @@ static SET_VALUE_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
  
  #[async_trait]
  impl Tool for SetValueTool {
@@ -5328,7 +5328,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
      fn def(&self) -> &ToolDef {
          SET_VALUE_DEF.get_or_init(|| ToolDef {
              name: "set_value".into(),
-@@ -5894,6 +8768,7 @@ impl Tool for SetValueTool {
+@@ -5944,6 +8818,7 @@ impl Tool for SetValueTool {
                      "window_id":{"type":"integer","description":"HWND of the window. Omit when element_token is supplied (the token carries it)."},
                      "element_token": cua_driver_core::tool_schema::element_token_schema(),
                      "value":{"type":"string","description":"New value. UIA will coerce to the element's native type."},
@@ -5336,7 +5336,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                      "delivery_mode": crate::input::delivery::delivery_mode_schema()
                  },"additionalProperties":false
              }),
-@@ -5913,6 +8788,10 @@ impl Tool for SetValueTool {
+@@ -5963,6 +8838,10 @@ impl Tool for SetValueTool {
              Some(v) => v.to_owned(),
              None => return ToolResult::error("Missing required string field value."),
          };
@@ -5347,7 +5347,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          let resolved = match self.state.snapshots.resolve(pid as i32, &args) {
              Ok(r) => r,
              Err(e) => return e,
-@@ -5926,14 +8805,77 @@ impl Tool for SetValueTool {
+@@ -5976,14 +8855,77 @@ impl Tool for SetValueTool {
                  "set_value requires a UIA element; MSAA value writes are unsupported.",
              );
          }
@@ -5427,7 +5427,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          {
              Some(crate::input::NoActivateGuard::arm(
                  windows::Win32::Foundation::HWND(hwnd as *mut _),
-@@ -5946,7 +8888,7 @@ impl Tool for SetValueTool {
+@@ -5996,7 +8938,7 @@ impl Tool for SetValueTool {
          // value, so a value write gets the same visual feedback as a click —
          // the viewer can see *where* the agent is acting. No-op when the
          // overlay is disabled or the element has no cached center.
@@ -5435,8 +5435,8 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
 +        if private_environment.is_none() {
              let (cx, cy) = admitted.center;
              pin_overlay_above(&cursor_key, hwnd);
-             overlay_glide_to(&cursor_key, cx as f64, cy as f64).await;
-@@ -5959,73 +8901,224 @@ impl Tool for SetValueTool {
+             overlay_glide_to_target(
+@@ -6015,73 +8957,224 @@ impl Tool for SetValueTool {
              );
          }
  
@@ -5717,7 +5717,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          }
      }
  }
-@@ -6077,6 +9170,14 @@ impl Tool for ScrollTool {
+@@ -6133,6 +9226,14 @@ impl Tool for ScrollTool {
      async fn invoke(&self, args: Value) -> ToolResult {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
@@ -5732,7 +5732,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          // ── Window-less screen-absolute branch (desktop target) ───────────────
          // No pid/window_id + numeric x,y + desktop scope → synthesize a wheel
          // event at the screen point via SendInput. The wheel routes to whatever
-@@ -6086,6 +9187,17 @@ impl Tool for ScrollTool {
+@@ -6142,6 +9243,17 @@ impl Tool for ScrollTool {
          let has_window_id = args.get("window_id").map(|v| !v.is_null()).unwrap_or(false);
          let has_xy = args.get("x").map(|v| v.is_number()).unwrap_or(false)
              && args.get("y").map(|v| v.is_number()).unwrap_or(false);
@@ -5750,7 +5750,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          if !has_pid && !has_window_id && has_xy {
              if !is_windowless_desktop_action(&args) {
                  return ToolResult::error(
-@@ -6150,6 +9262,253 @@ impl Tool for ScrollTool {
+@@ -6206,6 +9318,253 @@ impl Tool for ScrollTool {
          };
          let (elem_idx, hwnd_opt, admitted) = resolved.into_parts(args.opt_u64("window_id"));
  
@@ -6004,7 +6004,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          // Resolve HWND: use window_id if given, else first window for pid.
          let hwnd = match hwnd_opt {
              Some(h) => h,
-@@ -6646,6 +10005,14 @@ impl Tool for DoubleClickTool {
+@@ -6702,6 +10061,14 @@ impl Tool for DoubleClickTool {
              None => return ToolResult::error("Missing required integer field pid."),
          };
          let pid = raw_pid as u32;
@@ -6019,7 +6019,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          use cua_driver_core::tool_args::ArgsExt;
          let resolved = match self.state.snapshots.resolve(pid as i32, &args) {
              Ok(r) => r,
-@@ -6671,6 +10038,84 @@ impl Tool for DoubleClickTool {
+@@ -6727,6 +10094,84 @@ impl Tool for DoubleClickTool {
              );
          }
  
@@ -6104,7 +6104,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          // Resolve HWND: explicit, or auto from pid.
          let hwnd = match hwnd_opt {
              Some(h) => h,
-@@ -7004,6 +10449,14 @@ impl Tool for RightClickTool {
+@@ -7069,6 +10514,14 @@ impl Tool for RightClickTool {
              None => return ToolResult::error("Missing required integer field pid."),
          };
          let pid = raw_pid as u32;
@@ -6119,7 +6119,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          use cua_driver_core::tool_args::ArgsExt;
          let resolved = match self.state.snapshots.resolve(pid as i32, &args) {
              Ok(r) => r,
-@@ -7029,6 +10482,84 @@ impl Tool for RightClickTool {
+@@ -7094,6 +10547,84 @@ impl Tool for RightClickTool {
              );
          }
  
@@ -6204,7 +6204,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          // Resolve HWND: explicit, or auto from pid.
          let hwnd = match hwnd_opt {
              Some(h) => h,
-@@ -7343,6 +10874,29 @@ impl Tool for DragTool {
+@@ -7417,6 +10948,29 @@ impl Tool for DragTool {
          use crate::input::delivery::{DeliveryMode, EventKind};
          use cua_driver_core::tool_args::ArgsExt;
          let cursor_key = resolve_cursor_key(&args);
@@ -6234,7 +6234,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          if args.get("scope").and_then(Value::as_str) == Some("desktop")
              && args.get("pid").is_none()
              && args.get("window_id").is_none()
-@@ -7438,17 +10992,191 @@ impl Tool for DragTool {
+@@ -7512,17 +11066,191 @@ impl Tool for DragTool {
                      to_x = wx2;
                      to_y = wy2;
                  }
@@ -6436,7 +6436,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          }
  
          let hwnd = match hwnd_opt {
-@@ -7951,24 +11679,193 @@ impl Tool for MoveCursorTool {
+@@ -8025,24 +11753,193 @@ impl Tool for MoveCursorTool {
          MCURSOR_DEF.get_or_init(|| ToolDef {
              name: "move_cursor".into(),
              description:
@@ -6635,7 +6635,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
              let input = match parse_typed_projection::<MoveCursorInput>("move_cursor", &args) {
                  Ok(input) => input,
                  Err(error) => return error,
-@@ -7985,21 +11882,15 @@ impl Tool for MoveCursorTool {
+@@ -8059,21 +11956,15 @@ impl Tool for MoveCursorTool {
                  Err(error) => ToolResult::error(error.to_string()),
              };
          }
@@ -6660,7 +6660,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          crate::overlay::animate_cursor_to(cursor_key.clone(), x, y).await;
          let shown = if cursor_key.is_empty() {
              "default"
-@@ -8768,6 +12659,7 @@ impl Tool for ZoomTool {
+@@ -8840,6 +12731,7 @@ impl Tool for ZoomTool {
                  current snapshot owned by this session and window.".into(),
              input_schema: json!({
                  "type":"object","required":["window_id","x1","y1","x2","y2"],"properties":{
@@ -6668,7 +6668,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                      "pid":{"type":"integer","description":"Optional target process ID. When omitted, the unique current snapshot for this session and HWND is used."},
                      "window_id":{"type":"integer","description":"HWND of the target window."},
                      "x1":{"type":"number","description":"Left edge of the region (resized-image pixels)."},
-@@ -8793,6 +12685,14 @@ impl Tool for ZoomTool {
+@@ -8865,6 +12757,14 @@ impl Tool for ZoomTool {
              Some(v) => v,
              None => return ToolResult::error("Missing required integer field window_id."),
          };
@@ -6683,7 +6683,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          use cua_driver_core::tool_args::ArgsExt;
          let coerce = |k: &str| {
              args.opt_f64(k)
-@@ -8826,6 +12726,21 @@ impl Tool for ZoomTool {
+@@ -8898,6 +12798,21 @@ impl Tool for ZoomTool {
              Ok(context) => context,
              Err(refusal) => return refusal,
          };
@@ -6705,7 +6705,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          let (nx1, ny1, nx2, ny2) = (
              x1 * screenshot.scale,
              y1 * screenshot.scale,
-@@ -8834,11 +12749,22 @@ impl Tool for ZoomTool {
+@@ -8906,11 +12821,22 @@ impl Tool for ZoomTool {
          );
  
          let state = self.state.clone();
@@ -6733,7 +6733,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  
          match result {
              Ok(Ok(crop)) => {
-@@ -8870,10 +12796,24 @@ impl Tool for ZoomTool {
+@@ -8942,10 +12868,24 @@ impl Tool for ZoomTool {
                      is_error: None,
                      // Surface 7: `mime_type` mirrors the MCP image part's `mimeType`
                      // onto the structured payload (additive — `format` stays).
@@ -6762,7 +6762,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                      action_record: None,
                  }
              }
-@@ -8974,7 +12914,9 @@ impl Tool for TypeTextCharsTool {
+@@ -9046,7 +12986,9 @@ impl Tool for TypeTextCharsTool {
  
  // ── invoke_menu ───────────────────────────────────────────────────────────
  
@@ -6773,7 +6773,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  static INVOKE_MENU_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
  
  fn normalized_menu_path(path: Vec<String>) -> Result<Vec<String>, String> {
-@@ -9048,18 +12990,74 @@ impl Tool for InvokeMenuTool {
+@@ -9120,18 +13062,74 @@ impl Tool for InvokeMenuTool {
              Ok(input) => input,
              Err(result) => return result,
          };
@@ -6850,7 +6850,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
              return menu_refusal("invoke_menu: window_id does not belong to pid".into());
          }
  
-@@ -9153,7 +13151,9 @@ fn outer_frame_for_visible_request(
+@@ -9225,7 +13223,9 @@ fn outer_frame_for_visible_request(
      ))
  }
  
@@ -6861,7 +6861,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
  
  static SET_WINDOW_FRAME_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
  
-@@ -9187,7 +13187,32 @@ impl Tool for SetWindowFrameTool {
+@@ -9259,7 +13259,32 @@ impl Tool for SetWindowFrameTool {
                  Ok(input) => input,
                  Err(result) => return result,
              };
@@ -6895,7 +6895,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
              use windows::Win32::{
                  Foundation::{HWND, RECT},
                  Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS},
-@@ -9210,7 +13235,9 @@ impl Tool for SetWindowFrameTool {
+@@ -9282,7 +13307,9 @@ impl Tool for SetWindowFrameTool {
              let to_i32 = |name: &str, value: f64| -> Result<i32, String> {
                  let rounded = value.round();
                  if rounded < i32::MIN as f64 || rounded > i32::MAX as f64 {
@@ -6906,7 +6906,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
                  } else {
                      Ok(rounded as i32)
                  }
-@@ -9224,7 +13251,10 @@ impl Tool for SetWindowFrameTool {
+@@ -9296,7 +13323,10 @@ impl Tool for SetWindowFrameTool {
              }
              let hwnd = HWND(input.window_id as usize as *mut std::ffi::c_void);
              if !unsafe { IsWindow(hwnd).as_bool() } {
@@ -6918,7 +6918,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
              }
              let mut owner_pid = 0_u32;
              unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner_pid)) };
-@@ -9246,45 +13276,43 @@ impl Tool for SetWindowFrameTool {
+@@ -9318,45 +13348,43 @@ impl Tool for SetWindowFrameTool {
                      input.window_id
                  ));
              }
@@ -6999,7 +6999,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
              let mutation_error = unsafe {
                  SetWindowPos(
                      hwnd,
-@@ -9317,47 +13345,57 @@ impl Tool for SetWindowFrameTool {
+@@ -9389,47 +13417,57 @@ impl Tool for SetWindowFrameTool {
                  changed,
                  mutation_error,
              ))
@@ -7093,7 +7093,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
      }
  }
  
-@@ -10026,11 +14064,13 @@ pub fn build_registry_with_provider(
+@@ -10098,11 +14136,13 @@ pub fn build_registry_with_provider(
      // `register_all` session_end hook (platform-macos/src/tools/mod.rs).
      let cursor_registry = state.cursor_registry.clone();
      let snapshots = state.snapshots.clone();
@@ -7107,7 +7107,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
          });
      let session_revive_hook =
          cua_driver_core::session::register_scoped_session_revive_hook(move |session_id| {
-@@ -10061,20 +14101,21 @@ pub fn build_registry_with_provider(
+@@ -10133,20 +14173,21 @@ pub fn build_registry_with_provider(
      }));
      r.register(Box::new(
          cua_driver_core::expectation::VerifyStateTool::new(std::sync::Arc::new(
@@ -7138,7 +7138,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
      r.register(Box::new(DebugWindowInfoTool));
      r.register(pid_window_guarded(
          ClickTool {
-@@ -10157,9 +14198,12 @@ pub fn build_registry_with_provider(
+@@ -10229,9 +14270,12 @@ pub fn build_registry_with_provider(
          state: state.clone(),
      }));
      r.register(Box::new(GetCursorPositionTool));
@@ -7154,7 +7154,7 @@ index 4b16dc7d83765f0374d2e70653cb97bfa944537d..8976fbb67e5bf6544a3b00c3856e62d2
      r.register(Box::new(SetAgentCursorEnabledV2Tool {
          state: state.clone(),
      }));
-@@ -10219,7 +14263,170 @@ pub fn build_registry_with_provider(
+@@ -10291,7 +14335,170 @@ pub fn build_registry_with_provider(
  mod cursor_key_resolution_tests;
  
  #[cfg(test)]

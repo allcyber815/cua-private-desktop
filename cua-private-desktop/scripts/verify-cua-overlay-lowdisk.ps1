@@ -24,7 +24,7 @@ try {
         (Join-Path $Destination 'libs\cua\crates\cua-teleport\src\ux\targets.json')
     )) {
         if (-not (Test-Path -LiteralPath $requiredSourceAsset)) {
-            throw "required CUA 0.33.1 compile-time source asset missing: $requiredSourceAsset"
+            throw "required CUA 0.34.0 compile-time source asset missing: $requiredSourceAsset"
         }
     }
 
