@@ -33,7 +33,9 @@ if ($LASTEXITCODE -ne 0) { throw 'materialized overlay diff check failed' }
 
 Push-Location $RustRoot
 try {
-    rustup run 1.97.1 cargo fmt --all -- --check
+    # Rust 1.97.1 on Windows can exceed the command-line/path limit for the expanded 0.39 workspace.
+    # Verify all WebGPT-touched crates explicitly; cargo check below covers the same crates.
+    rustup run 1.97.1 cargo fmt -p cua-driver-contract -p cua-driver-core -p platform-windows -- --check
     if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed' }
 
     rustup run 1.97.1 cargo metadata --no-deps --locked --format-version 1 | Out-Null
