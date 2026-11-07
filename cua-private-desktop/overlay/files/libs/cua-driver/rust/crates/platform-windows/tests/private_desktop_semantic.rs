@@ -1098,6 +1098,7 @@ async fn private_registry_launch_snapshot_set_value_readback_and_session_cleanup
                 "session": session,
                 "pid": pid,
                 "window_id": window_id,
+                "tree_format": "both",
                 "include_screenshot": false,
             }),
         )
@@ -1147,6 +1148,7 @@ async fn private_registry_launch_snapshot_set_value_readback_and_session_cleanup
                 "session": session,
                 "pid": pid,
                 "window_id": window_id,
+                "tree_format": "both",
                 "include_screenshot": false,
             }),
         )
@@ -1196,6 +1198,7 @@ async fn private_registry_launch_snapshot_set_value_readback_and_session_cleanup
                 "session": session,
                 "pid": pid,
                 "window_id": window_id,
+                "tree_format": "both",
                 "include_screenshot": false,
             }),
         )
@@ -1244,6 +1247,7 @@ async fn private_registry_launch_snapshot_set_value_readback_and_session_cleanup
                 "session": session,
                 "pid": pid,
                 "window_id": window_id,
+                "tree_format": "both",
                 "include_screenshot": false,
             }),
         )
