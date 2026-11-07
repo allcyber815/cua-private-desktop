@@ -2,11 +2,11 @@ schema = 1
 
 [cua]
 url = "https://github.com/trycua/cua.git"
-commit = "81f3e1bbc0d113c1a33a71b4150fb6ece6a5e9cd"
-version = "0.39.0"
+commit = "86b5ea2d403017d224bb7a1057f1841668b0a68c"
+version = "0.41.2"
 license = "MIT"
 role = "primary Windows computer-use runtime with private-desktop strict-background and foreground/visual backends"
 
 [cua.private_desktop_overlay]
 path = "overlay"
-status = "0.39.0 experimental forward-port only; Windows tool modularization requires separate private-desktop dispatch preservation; do not deploy until all gates pass"
+status = "0.41.2 experimental forward-port only; Windows tool modularization requires separate private-desktop dispatch preservation; do not deploy until all gates pass"
