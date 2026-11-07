@@ -2375,7 +2375,7 @@ index 356b2b52e8c7502694a4b28750ac25875475d11f..5df6d9040ef40c9331346120b3253981
              Some(h) => h,
              None => {
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/get_window_state.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/get_window_state.rs
-index 46f71e799e7bed44030f96a14b508232278f0878..2779b3981aa35ea0160eb061d9a0ea8e1a98e559 100644
+index 46f71e799e7bed44030f96a14b508232278f0878..f193b050779bfc20640c11da023d9e583e8ef1da 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/get_window_state.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/get_window_state.rs
 @@ -1,6 +1,7 @@
@@ -2498,7 +2498,7 @@ index 46f71e799e7bed44030f96a14b508232278f0878..2779b3981aa35ea0160eb061d9a0ea8e
          let app_name = tokio::task::spawn_blocking(move || {
              crate::win32::list_processes()
                  .into_iter()
-@@ -376,6 +417,8 @@ impl Tool for GetWindowStateTool {
+@@ -376,33 +417,52 @@ impl Tool for GetWindowStateTool {
          let state = self.state.clone();
          let q = query.clone();
          let out_file = screenshot_out_file.clone();
@@ -2507,7 +2507,67 @@ index 46f71e799e7bed44030f96a14b508232278f0878..2779b3981aa35ea0160eb061d9a0ea8e
          // The tree walk runs under `timeout_ms`. UIA's bulk BuildUpdatedCache
          // cannot be interrupted (Chrome's provider can block indefinitely on
          // property reads), so when the walk task itself outlives the budget
-@@ -429,43 +472,82 @@ impl Tool for GetWindowStateTool {
+         // the response carries an empty tree flagged `truncated` instead of an
+         // error, and the screenshot below still comes back.
+         let tree_result = if do_tree {
+-            let tree_task = tokio::task::spawn_blocking(move || {
+-                let mut budget =
+-                    cua_driver_core::walk_budget::WalkBudget::new(timeout_ms, max_elements);
+-                let iconic_before = crate::input::window_is_iconic(hwnd);
+-                let tree =
+-                    crate::uia::walk_tree_budgeted(hwnd, q.as_deref(), max_depth, &mut budget);
+-                let kind = if tree.nodes.iter().any(|node| node.msaa_role.is_some()) {
+-                    crate::uia::snapshot::SnapshotKind::Msaa
+-                } else {
+-                    crate::uia::snapshot::SnapshotKind::Uia
++            let tree_task = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
++                let work = move || -> anyhow::Result<_> {
++                    let mut budget =
++                        cua_driver_core::walk_budget::WalkBudget::new(timeout_ms, max_elements);
++                    let iconic_before = crate::input::window_is_iconic(hwnd);
++                    let tree = if private_capture {
++                        crate::uia::walk_tree_budgeted_private(
++                            hwnd,
++                            q.as_deref(),
++                            max_elements,
++                            max_depth,
++                            &mut budget,
++                        )
++                    } else {
++                        crate::uia::walk_tree_budgeted(hwnd, q.as_deref(), max_depth, &mut budget)
++                    };
++                    let kind = if tree.nodes.iter().any(|node| node.msaa_role.is_some()) {
++                        crate::uia::snapshot::SnapshotKind::Msaa
++                    } else {
++                        crate::uia::snapshot::SnapshotKind::Uia
++                    };
++                    let payload = crate::uia::snapshot::UiaSnapshot::from_nodes(&tree.nodes, kind)
++                        .with_read_while_minimized(
++                            iconic_before || crate::input::window_is_iconic(hwnd),
++                        );
++                    Ok((tree, payload, budget.outcome()))
+                 };
+-                let payload = crate::uia::snapshot::UiaSnapshot::from_nodes(&tree.nodes, kind)
+-                    .with_read_while_minimized(
+-                        iconic_before || crate::input::window_is_iconic(hwnd),
+-                    );
+-                (tree, payload, budget.outcome())
++                if let Some(environment) = tree_environment {
++                    environment.run_attached_blocking(work)
++                } else {
++                    work()
++                }
+             });
+             let started = std::time::Instant::now();
+             let deadline = std::time::Duration::from_millis(timeout_ms) + UIA_WALK_BACKSTOP_GRACE;
+             match tokio::time::timeout(deadline, tree_task).await {
+-                Ok(Ok(tree)) => Some(tree),
++                Ok(Ok(Ok(tree))) => Some(tree),
++                Ok(Ok(Err(e))) => return ToolResult::error(format!("UIA walk failed: {e}")),
+                 Ok(Err(e)) => return ToolResult::error(format!("UIA walk task panicked: {e}")),
+                 Err(_elapsed) => {
+                     let class = crate::input::delivery::read_class_name(hwnd);
+@@ -429,43 +489,82 @@ impl Tool for GetWindowStateTool {
          } else {
              None
          };
@@ -2623,7 +2683,7 @@ index 46f71e799e7bed44030f96a14b508232278f0878..2779b3981aa35ea0160eb061d9a0ea8e
          });
          let result: anyhow::Result<_> =
              match tokio::time::timeout(UIA_SCREENSHOT_TIMEOUT, blocking).await {
-@@ -478,21 +560,30 @@ impl Tool for GetWindowStateTool {
+@@ -478,21 +577,30 @@ impl Tool for GetWindowStateTool {
                          "window capture did not finish within {}s",
                          UIA_SCREENSHOT_TIMEOUT.as_secs()
                      )),
@@ -2968,10 +3028,18 @@ index 9636a52c48cee59b106d235a4350ffafc9badec2..d13d361b03d9042f5e78b1bd3aeb8bbf
          let hwnd = match hwnd_opt {
              Some(h) => h,
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index b51ef4c591ab3930abfc697b836ec13b63735bef..66f300796dcfcb3302470962bb322ef5cd482b89 100644
+index b51ef4c591ab3930abfc697b836ec13b63735bef..3b5c866157b30a6c79a2eb5b8a9ded228e67bc36 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-@@ -621,6 +621,7 @@ pub fn load_driver_config() -> DriverConfig {
+@@ -357,6 +357,7 @@ pub(crate) fn element_target_rect(
+ }
+ 
+ use cua_driver_core::{
++    action_record::ActionTransport,
+     protocol::ToolResult,
+     tool::{Tool, ToolDef, ToolRegistry},
+     window_target::{PidOnlyWindowTargetGuard, WindowTargetCandidate, WindowTargetCandidates},
+@@ -621,6 +622,7 @@ pub fn load_driver_config() -> DriverConfig {
      cfg
  }
  
@@ -2979,7 +3047,7 @@ index b51ef4c591ab3930abfc697b836ec13b63735bef..66f300796dcfcb3302470962bb322ef5
  use cua_driver_core::snapshot_store::ZoomContext;
  
  pub struct ToolState {
-@@ -628,6 +629,8 @@ pub struct ToolState {
+@@ -628,6 +630,8 @@ pub struct ToolState {
      pub cursor_registry: Arc<CursorRegistry>,
      pub config: Arc<RwLock<DriverConfig>>,
      pub(crate) capture_bridge: Option<Arc<crate::capture_admission::WindowsCaptureBridge>>,
@@ -2988,7 +3056,7 @@ index b51ef4c591ab3930abfc697b836ec13b63735bef..66f300796dcfcb3302470962bb322ef5
  }
  
  impl ToolState {
-@@ -638,6 +641,9 @@ impl ToolState {
+@@ -638,6 +642,9 @@ impl ToolState {
              snapshots: Arc::new(Snapshots::new()),
              cursor_registry: Arc::new(CursorRegistry::new()),
              config: Arc::new(RwLock::new(load_driver_config())),
@@ -2998,7 +3066,7 @@ index b51ef4c591ab3930abfc697b836ec13b63735bef..66f300796dcfcb3302470962bb322ef5
              capture_bridge: capture_service
                  .map(crate::capture_admission::WindowsCaptureBridge::new),
          })
-@@ -657,6 +663,1711 @@ impl ToolState {
+@@ -657,6 +664,1711 @@ impl ToolState {
      }
  }
  
@@ -4454,12 +4522,12 @@ index b51ef4c591ab3930abfc697b836ec13b63735bef..66f300796dcfcb3302470962bb322ef5
 +}
 +
 +#[derive(Clone, Debug)]
-+struct PrivateSemanticGate {
-+    framework: crate::execution_environment::PrivateFramework,
-+    window_state: crate::execution_environment::PrivateWindowState,
-+    decision: crate::execution_environment::PrivatePolicyDecision,
-+    worker_integrity_rid: u32,
-+    target_integrity_rid: u32,
++pub(crate) struct PrivateSemanticGate {
++    pub(crate) framework: crate::execution_environment::PrivateFramework,
++    pub(crate) window_state: crate::execution_environment::PrivateWindowState,
++    pub(crate) decision: crate::execution_environment::PrivatePolicyDecision,
++    pub(crate) worker_integrity_rid: u32,
++    pub(crate) target_integrity_rid: u32,
 +}
 +
 +pub(crate) fn private_target_profile_cacheable(
@@ -4710,7 +4778,7 @@ index b51ef4c591ab3930abfc697b836ec13b63735bef..66f300796dcfcb3302470962bb322ef5
  pub(crate) fn screenshot_scale(
      state: &ToolState,
      args: &Value,
-@@ -1302,9 +3013,11 @@ pub fn build_registry_with_provider(
+@@ -1302,9 +3014,11 @@ pub fn build_registry_with_provider(
      // `register_all` session_end hook (platform-macos/src/tools/mod.rs).
      let cursor_registry = state.cursor_registry.clone();
      let snapshots = state.snapshots.clone();
@@ -4722,7 +4790,7 @@ index b51ef4c591ab3930abfc697b836ec13b63735bef..66f300796dcfcb3302470962bb322ef5
              cursor_registry.remove(session_id);
              crate::overlay::remove_cursor(session_id.to_owned());
          });
-@@ -1337,23 +3050,24 @@ pub fn build_registry_with_provider(
+@@ -1337,23 +3051,24 @@ pub fn build_registry_with_provider(
      }));
      r.register(Box::new(
          cua_driver_core::expectation::VerifyStateTool::new(std::sync::Arc::new(
@@ -4861,7 +4929,7 @@ index 395b005825f2239af0ba7743a361fa1a04c25468..6d83f4ff36bd19a5b9d44e43fd60b705
          }
  
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/launch_app.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/launch_app.rs
-index 81782b88bfe27080a9267320f0f6a382505b5ef7..da34b8831501042f8ac74eb8d6e4a52f3b4d7d0a 100644
+index 81782b88bfe27080a9267320f0f6a382505b5ef7..42da2dd7c385baa168aaedcf0dddbba943602f00 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/launch_app.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/launch_app.rs
 @@ -1,6 +1,7 @@
@@ -4990,7 +5058,7 @@ index 81782b88bfe27080a9267320f0f6a382505b5ef7..da34b8831501042f8ac74eb8d6e4a52f
 +            if args.get("cdp_debugging_port").is_some()
 +                || std::iter::once(private_path.as_str())
 +                    .chain(private_args.iter().map(String::as_str))
-+                    .any(contains_remote_debugging_flag)
++                    .any(cua_driver_core::launch_guard::contains_remote_debugging_flag)
 +            {
 +                return ToolResult::error(
 +                    "Chromium remote-debugging flags moved to browser_prepare so DevTools is never enabled on an unproven user profile",
@@ -6167,7 +6235,7 @@ index cbd809473c18c6134889fff402bbcb3e92d814a9..812aa8742e4898348ed940271a26ded0
          let hwnd = match hwnd_opt {
              Some(h) => h,
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/set_value.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/set_value.rs
-index 8841474b888a99869fa609550e1dda32cb493df0..94e450692995964b85273f82ab1388e093af9e79 100644
+index 8841474b888a99869fa609550e1dda32cb493df0..16795b21bc3948ef86ca302b731b354a48f23390 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/set_value.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/set_value.rs
 @@ -1,6 +1,7 @@
@@ -6208,7 +6276,7 @@ index 8841474b888a99869fa609550e1dda32cb493df0..94e450692995964b85273f82ab1388e0
          let resolved = match self.state.snapshots.resolve(pid as i32, &args) {
              Ok(r) => r,
              Err(e) => return e,
-@@ -83,14 +93,77 @@ impl Tool for SetValueTool {
+@@ -83,14 +93,254 @@ impl Tool for SetValueTool {
                  "set_value requires a UIA element; MSAA value writes are unsupported.",
              );
          }
@@ -6274,6 +6342,183 @@ index 8841474b888a99869fa609550e1dda32cb493df0..94e450692995964b85273f82ab1388e0
 +        } else {
 +            None
 +        };
++
++        // A private-desktop session must not fall through to the shared UIA/Win32
++        // dispatch lane. Perform and verify the semantic write on its owned actor.
++        if let Some(environment) = private_environment.clone() {
++            use cua_driver_core::action_record::{
++                ActionEffect, ActionEvidence, ActionExecutionRecord, ActionTransport,
++                ActualDelivery, EvidenceKind, RequestedDelivery,
++            };
++            let gate = private_gate
++                .as_ref()
++                .expect("private set_value must have an admitted semantic gate");
++            let expected = value.clone();
++            let task_value = expected.clone();
++            let transport = gate.decision.transport;
++            let outcome = environment
++                .run_attached_blocking_async(move || -> anyhow::Result<(String, Option<String>)> {
++                    use windows::core::{Interface, BSTR};
++                    use windows::Win32::UI::Accessibility::{
++                        IUIAutomationElement, IUIAutomationRangeValuePattern,
++                        IUIAutomationValuePattern, UIA_RangeValuePatternId,
++                        UIA_ValuePatternId,
++                    };
++                    let ptr = admitted.as_ptr();
++                    let elem = std::mem::ManuallyDrop::new(unsafe {
++                        IUIAutomationElement::from_raw(ptr as *mut _)
++                    });
++                    if transport
++                        == Some(crate::execution_environment::PrivateActionTransport::Win32Message)
++                    {
++                        let receipt = crate::execution_environment::winforms_native::set_value(
++                            &elem,
++                            task_value.as_str(),
++                        )?;
++                        if receipt.semantic_verified != Some(true) {
++                            anyhow::bail!(
++                                "private WinForms value write completed without a verified readback"
++                            );
++                        }
++                        return Ok((
++                            "WinFormsNativeValue".to_owned(),
++                            Some(receipt.postcondition_readback),
++                        ));
++                    }
++                    if transport
++                        != Some(crate::execution_environment::PrivateActionTransport::UiaPattern)
++                    {
++                        anyhow::bail!("private set_value refused unsupported semantic transport");
++                    }
++                    if let Ok(pattern) = unsafe { elem.GetCurrentPattern(UIA_ValuePatternId) } {
++                        if let Ok(vp) = pattern.cast::<IUIAutomationValuePattern>() {
++                            crate::uia::fg_bypass::run_with_uwp_bypass(
++                                hwnd as isize,
++                                || unsafe { vp.SetValue(&BSTR::from(task_value.as_str())) },
++                            )?;
++                            let readback = crate::execution_environment::poll_private_postcondition(
++                                || unsafe {
++                                    vp.CurrentValue().ok().map(|current| {
++                                        let text = current.to_string();
++                                        let matches = text == task_value;
++                                        (text, matches)
++                                    })
++                                },
++                            );
++                            return Ok(("ValuePattern".to_owned(), readback));
++                        }
++                    }
++                    if let Ok(pattern) =
++                        unsafe { elem.GetCurrentPattern(UIA_RangeValuePatternId) }
++                    {
++                        if let Ok(rv) = pattern.cast::<IUIAutomationRangeValuePattern>() {
++                            let expected_number: f64 = task_value.parse()?;
++                            crate::uia::fg_bypass::run_with_uwp_bypass(
++                                hwnd as isize,
++                                || unsafe { rv.SetValue(expected_number) },
++                            )?;
++                            let tolerance = f64::EPSILON * expected_number.abs().max(1.0) * 8.0;
++                            let readback = crate::execution_environment::poll_private_postcondition(
++                                || unsafe {
++                                    rv.CurrentValue().ok().map(|current| {
++                                        (current.to_string(),
++                                         (current - expected_number).abs() <= tolerance)
++                                    })
++                                },
++                            );
++                            return Ok(("RangeValuePattern".to_owned(), readback));
++                        }
++                    }
++                    anyhow::bail!(
++                        "private set_value refused: target has no verified ValuePattern or RangeValuePattern"
++                    )
++                })
++                .await;
++            let action_result = match outcome {
++                Ok((pattern, readback)) => {
++                    let semantic_verified = if pattern == "RangeValuePattern" {
++                        match (
++                            expected.parse::<f64>().ok(),
++                            readback
++                                .as_deref()
++                                .and_then(|value| value.parse::<f64>().ok()),
++                        ) {
++                            (Some(want), Some(got)) => {
++                                (got - want).abs() <= f64::EPSILON * want.abs().max(1.0) * 8.0
++                            }
++                            _ => false,
++                        }
++                    } else {
++                        readback.as_deref() == Some(expected.as_str())
++                    };
++                    if semantic_verified {
++                        let action_transport = match pattern.as_str() {
++                            "WinFormsNativeValue" => ActionTransport::WindowsPostMessage,
++                            "RangeValuePattern" => ActionTransport::WindowsUiaRangeValue,
++                            _ => ActionTransport::WindowsUiaValue,
++                        };
++                        let record = ActionExecutionRecord::builder(
++                            ActionEffect::Confirmed,
++                            action_transport,
++                            RequestedDelivery::Background,
++                        )
++                        .actual_delivery(ActualDelivery::Background)
++                        .evidence(ActionEvidence {
++                            kind: EvidenceKind::ValueReadback,
++                            detail: "private-desktop semantic value readback matched".into(),
++                        })
++                        .detail(format!(
++                            "provider={:?}; state={:?}; pattern={pattern}",
++                            gate.framework, gate.window_state
++                        ))
++                        .build()
++                        .expect("private confirmed set_value record must validate");
++                        ToolResult::text(format!(
++                            "Set value on element [{idx}] via {pattern}; private semantic readback verified."
++                        ))
++                        .with_structured(json!({
++                            "isolation_mode": "private_desktop",
++                            "provider": format!("{:?}", gate.framework),
++                            "action": "Value",
++                            "window_state": format!("{:?}", gate.window_state),
++                            "actual_transport": format!("{:?}", gate.decision.transport),
++                            "semantic_verified": true,
++                            "postcondition_readback": readback,
++                        }))
++                        .with_action_record(record)
++                    } else {
++                        ToolResult::error(format!(
++                            "private set_value reached element [{idx}] but its readback did not match"
++                        ))
++                        .with_structured(json!({
++                            "code": "postcondition_failed",
++                            "isolation_mode": "private_desktop",
++                            "action": "Value",
++                            "semantic_verified": false,
++                            "postcondition_readback": readback,
++                            "target_launched": true,
++                            "action_performed": true,
++                        }))
++                    }
++                }
++                Err(error) => ToolResult::error(format!(
++                    "private set_value did not establish a verified postcondition: {error}"
++                ))
++                .with_structured(json!({
++                    "code": "private_value_transport_failed",
++                    "isolation_mode": "private_desktop",
++                    "action": "Value",
++                    "semantic_verified": false,
++                })),
++            };
++            let visual_result =
++                complete_private_visual_result(action_result, environment, hwnd, visual_baseline)
++                    .await;
++            return complete_private_interference_result(
++                visual_result,
++                interference.expect("private set_value requires interference observation"),
++            );
++        }
  
          // No-raise guard: a WPF/XAML automation peer calls UIElement.Focus() →
          // SetForegroundWindow during ValuePattern.SetValue. WS_EX_NOACTIVATE on
@@ -6288,7 +6533,7 @@ index 8841474b888a99869fa609550e1dda32cb493df0..94e450692995964b85273f82ab1388e0
          {
              Some(crate::input::NoActivateGuard::arm(
                  windows::Win32::Foundation::HWND(hwnd as *mut _),
-@@ -103,7 +176,7 @@ impl Tool for SetValueTool {
+@@ -103,7 +353,7 @@ impl Tool for SetValueTool {
          // value, so a value write gets the same visual feedback as a click —
          // the viewer can see *where* the agent is acting. No-op when the
          // overlay is disabled or the element has no cached center.
