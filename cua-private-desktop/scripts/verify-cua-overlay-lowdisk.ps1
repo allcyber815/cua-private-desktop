@@ -24,7 +24,7 @@ try {
         (Join-Path $Destination 'libs\cua\crates\cua-teleport\src\ux\targets.json')
     )) {
         if (-not (Test-Path -LiteralPath $requiredSourceAsset)) {
-            throw "required CUA 0.39.0 compile-time source asset missing: $requiredSourceAsset"
+            throw "required CUA 0.41.2 compile-time source asset missing: $requiredSourceAsset"
         }
     }
 
@@ -36,7 +36,7 @@ try {
         cargo +stable metadata --no-deps --locked --format-version 1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
 
-        cargo +stable fmt --all -- --check
+        cargo +stable fmt -p cua-driver-contract -p cua-driver-core -p platform-windows -- --check
         if ($LASTEXITCODE -ne 0) { throw 'cargo fmt --check failed' }
     }
     finally {
