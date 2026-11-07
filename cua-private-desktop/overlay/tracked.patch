@@ -539,7 +539,7 @@ index 1f3d927b787b643e8f1b62e1b3e2dc74bf674ef5..927fbf832bcc3556a8ca5d9fe9a22213
  }
  
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/snapshot_store.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/snapshot_store.rs
-index 790875ce327a1f277a575a439add5bb9cb997866..2d9fd2de011ea679479f0973b8b57d9c763cd4ee 100644
+index 790875ce327a1f277a575a439add5bb9cb997866..166cb919ca49b599197567f7104667927eaef280 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/snapshot_store.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/snapshot_store.rs
 @@ -448,6 +448,27 @@ impl<S: SnapshotPayload> SnapshotStore<S> {
@@ -561,7 +561,7 @@ index 790875ce327a1f277a575a439add5bb9cb997866..2d9fd2de011ea679479f0973b8b57d9c
 +            return None;
 +        }
 +        let inner = self.inner.lock().ok()?;
-+        let snapshot = inner.get(&pid)?.iter().find(|entry| {
++        let snapshot = inner.lanes.get(&pid)?.iter().find(|entry| {
 +            entry.window_id == window_id && entry.screenshot_owner.as_deref() == session
 +        })?;
 +        Some(read(&snapshot.payload))
