@@ -12,6 +12,13 @@ This repository is the canonical source for the WebGPT-maintained Windows CUA Dr
 
 This repository maintains an overlay separately from upstream CUA. Its presence here does **not** imply that upstream CUA has adopted or endorsed these changes.
 
+## Verified 0.41.2 source
+
+- Upstream CUA Driver version: 0.41.2, commit 86b5ea2d403017d224bb7a1057f1841668b0a68c.
+- Overlay build source: e5c1fa2ef6ccc48a6f0d8cd37ff82b4b8e68c128.
+- [Windows CI run 42369914594](https://github.com/allcyber815/cua-private-desktop/actions/runs/42369914594) passed contract, core, Windows, SDK ABI, and private-desktop semantic tests, and produced four hash-recorded artifacts.
+
+The upstreams.toml candidate-status note is retained as part of the exact source manifest hashed in that build receipt. It describes a pre-promotion gate, **not** current machine-specific deployment state. Runtime health, installation and ChatGPT action-schema verification must be established from the managed runtime, not inferred from this public repository. Optional provider-specific conformance fixtures are not part of the default CI suite.
 ## Layout
 
 - `cua-private-desktop/overlay/` — tracked patch plus overlay files
