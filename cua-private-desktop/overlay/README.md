@@ -1,5 +1,7 @@
 # CUA private-desktop overlay
 
+**Experimental 0.39.0 forward-port. NOT production-ready.** Upstream split Windows tools into separate modules; the old private-desktop dispatches in `impl_.rs` need a reviewed forward-port. This branch is only for CI/source gap discovery. The current 0.34.0 runtime remains authoritative until semantic verification and a verified promotion pass.
+
 This directory captures the WebGPT private-desktop delta rebased onto the exact CUA 0.34.0 commit pinned in the bundle's `upstreams.toml`. The semantic rebase preserves CUA 0.34.0's element-token-only action addressing, snapshot replacement/invalidation behavior, walk budgets, screenshot ownership, timeout, and browser-installation safety contracts while retaining the WebGPT private-desktop semantic/value actions, background input delivery, attached UIA, trusted PrintWindow capture, interference receipts, and session-aware verification. GitHub Actions Windows is the authoritative deep-build lane; when that lane is unavailable, the same pinned build pipeline can be run explicitly on the local Windows host with `-AllowLocalBuild`.
 
 - `tracked.patch` contains modifications to files already tracked by upstream CUA, including the additive ABI 1.2 daemon-connect seam retained by the promoted CUA private-desktop overlay.

@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$Pin = 'b0968e1b12834e485dda68789541a3cc57664a9f'
+$Pin = '81f3e1bbc0d113c1a33a71b4150fb6ece6a5e9cd'
 $Upstream = 'https://github.com/trycua/cua.git'
 $Overlay = Join-Path $RepoRoot 'overlay'
 
